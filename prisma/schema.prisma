@@ -1,0 +1,156 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
+// enough when changing adapters.
+// See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
+datasource db {
+  provider = "sqlite"
+  url      = "file:dev.sqlite"
+}
+
+model Session {
+  id            String    @id
+  shop          String
+  state         String
+  isOnline      Boolean   @default(false)
+  scope         String?
+  expires       DateTime?
+  accessToken   String
+  userId        BigInt?
+  firstName     String?
+  lastName      String?
+  email         String?
+  accountOwner  Boolean   @default(false)
+  locale        String?
+  collaborator  Boolean?  @default(false)
+  emailVerified Boolean?  @default(false)
+
+  // Custom smart-bill fields
+  role String? @default("SCANNER") // 'ADMIN' or 'SCANNER'
+}
+
+model Vendor {
+  id              String          @id @default(uuid())
+  shop            String
+  name            String
+  address         String?
+  email           String?
+  phone           String?
+  paymentTerms    String?
+  defaultCurrency String?         @default("USD")
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  invoices        Invoice[]
+  purchaseOrders  PurchaseOrder[]
+
+  @@unique([shop, name])
+}
+
+model PurchaseOrder {
+  id             String              @id @default(uuid())
+  shop           String
+  poNumber       String?
+  shopifyOrderId String?             @unique // Link to Shopify Order/Transfer ID if applicable
+  vendorId       String
+  vendor         Vendor              @relation(fields: [vendorId], references: [id])
+  status         String              @default("OPEN") // OPEN, PARTIAL, FULFILLED, MISMATCH
+  expectedDate   DateTime?
+  totalAmount    Float?
+  notes          String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  items          PurchaseOrderItem[]
+  linkedInvoices Invoice[]
+
+  @@unique([shop, poNumber])
+}
+
+model PurchaseOrderItem {
+  id               String        @id @default(uuid())
+  purchaseOrderId  String
+  purchaseOrder    PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  sku              String?
+  shopifyProductId String?
+  shopifyVariantId String?
+  name             String
+  expectedQty      Int
+  receivedQty      Int           @default(0)
+  expectedRate     Float?
+}
+
+model Invoice {
+  id                 String         @id @default(uuid())
+  shop               String
+  vendorId           String?
+  vendor             Vendor?        @relation(fields: [vendorId], references: [id])
+  purchaseOrderId    String?
+  purchaseOrder      PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+  invoiceNumber      String?
+  imageUrl           String
+  storageKey         String?
+  sourceFilename     String?
+  rawText            String?
+  date               DateTime
+  dueDate            DateTime?
+  currency           String         @default("USD")
+  subtotal           Float?
+  tax                Float?
+  total              Float
+  status             String         @default("PENDING_SYNC") // PENDING_SYNC, SYNCED
+  reviewStatus       String         @default("PENDING_REVIEW") // PENDING_REVIEW, NEEDS_ATTENTION, APPROVED
+  cogsSyncStatus     String         @default("NOT_REQUESTED") // NOT_REQUESTED, SYNCED, FAILED
+  accountingStatus   String         @default("NOT_EXPORTED") // NOT_EXPORTED, EXPORTED
+  discrepancySummary String?
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+  items              InvoiceItem[]
+}
+
+model InvoiceItem {
+  id                  String  @id @default(uuid())
+  invoiceId           String
+  invoice             Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  shopifyProductId    String? // Mapped Shopify Product ID
+  shopifyVariantId    String? // Mapped Shopify Variant ID
+  sku                 String?
+  name                String
+  quantity            Int     @default(1)
+  price               Float // Unit price (Rate)
+  amount              Float? // Total amount for this line item
+  confidence          Float?
+  matchedProductTitle String?
+}
+
+model ShopSettings {
+  id                  String   @id @default(uuid())
+  shop                String   @unique
+  billingPlan         String   @default("GROWTH")
+  accountingPlatform  String?
+  accountingConnected Boolean  @default(false)
+  autoSyncCogs        Boolean  @default(false)
+  requireReview       Boolean  @default(true)
+  defaultCurrency     String   @default("USD")
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
+
+model AccountingConnection {
+  id           String    @id @default(uuid())
+  shop         String
+  platform     String
+  accessToken  String
+  refreshToken String?
+  tenantId     String?
+  realmId      String?
+  scopes       String?
+  expiresAt    DateTime?
+  connectedAt  DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([shop, platform])
+}
