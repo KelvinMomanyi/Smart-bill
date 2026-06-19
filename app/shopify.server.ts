@@ -14,12 +14,46 @@ export const SMARTBILL_PLANS = {
   SCALE: "SmartBill Scale",
 } as const;
 
+function normalizeAppUrl(value?: string | null) {
+  const trimmed = value?.trim();
+  if (!trimmed) return "";
+
+  const withProtocol = /^https?:\/\//i.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
+  return withProtocol.replace(/\/+$/, "");
+}
+
+function resolveAppUrl() {
+  const appUrl = normalizeAppUrl(
+    process.env.SHOPIFY_APP_URL ||
+      process.env.APP_URL ||
+      process.env.VERCEL_PROJECT_PRODUCTION_URL ||
+      process.env.VERCEL_BRANCH_URL ||
+      process.env.NEXT_PUBLIC_VERCEL_URL ||
+      process.env.VERCEL_URL ||
+      process.env.HOST,
+  );
+
+  if (!appUrl) {
+    throw new Error(
+      [
+        "Missing Shopify app URL.",
+        "Set SHOPIFY_APP_URL in your deployment environment to your public HTTPS app URL.",
+        "For Vercel, use the production domain shown in Project Settings -> Domains, for example https://smart-bill.vercel.app.",
+      ].join(" "),
+    );
+  }
+
+  return appUrl;
+}
+
 const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY,
   apiSecretKey: process.env.SHOPIFY_API_SECRET || "",
   apiVersion: ApiVersion.January25,
   scopes: process.env.SCOPES?.split(","),
-  appUrl: process.env.SHOPIFY_APP_URL || "",
+  appUrl: resolveAppUrl(),
   authPathPrefix: "/auth",
   sessionStorage: new PrismaSessionStorage(prisma),
   distribution: AppDistribution.AppStore,

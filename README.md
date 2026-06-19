@@ -77,7 +77,7 @@ Create `.env` with the Shopify CLI values plus any optional integrations:
 ```env
 SHOPIFY_API_KEY=
 SHOPIFY_API_SECRET=
-SHOPIFY_APP_URL=
+SHOPIFY_APP_URL=https://your-production-domain.example
 SCOPES=write_products,read_products,write_inventory,read_inventory,read_orders,write_orders
 
 FIREBASE_PROJECT_ID=
@@ -95,6 +95,8 @@ Accounting callback URLs to register with providers:
 
 - `https://your-app-url/accounting/xero/callback`
 - `https://your-app-url/accounting/quickbooks/callback`
+
+For Vercel, set `SHOPIFY_APP_URL` to the stable production deployment URL. The app can fall back to Vercel's system URL variables, but Shopify OAuth, billing, and webhook callbacks should use one canonical production URL.
 
 ## Development
 
