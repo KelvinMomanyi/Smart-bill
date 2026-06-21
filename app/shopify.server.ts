@@ -55,7 +55,10 @@ const shopify = shopifyApp({
   scopes: process.env.SCOPES?.split(","),
   appUrl: resolveAppUrl(),
   authPathPrefix: "/auth",
-  sessionStorage: new PrismaSessionStorage(prisma),
+  sessionStorage: new PrismaSessionStorage(prisma, {
+    connectionRetries: 6,
+    connectionRetryIntervalMs: 2500,
+  }),
   distribution: AppDistribution.AppStore,
   billing: {
     [SMARTBILL_PLANS.GROWTH]: {
