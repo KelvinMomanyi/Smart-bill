@@ -4,6 +4,7 @@
   "scripts": {
     "build": "prisma generate && prisma migrate deploy && remix vite:build",
     "dev": "shopify app dev",
+    "postinstall": "prisma generate",
     "config:link": "shopify app config link",
     "generate": "shopify app generate",
     "deploy": "shopify app deploy",
