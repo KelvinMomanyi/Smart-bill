@@ -52,7 +52,7 @@ Recommended launch packaging:
 - Shopify App Remix
 - Remix and React
 - Shopify Polaris
-- Prisma with SQLite for local development
+- Prisma with PostgreSQL for app and Shopify session data
 - Tesseract.js and PDF.js for OCR/PDF extraction
 - Firebase Storage for private invoice file storage when configured
 - Shopify Admin GraphQL for inventory item cost updates
@@ -62,7 +62,7 @@ Recommended launch packaging:
 - Node.js 18.20 or newer
 - Shopify Partner account
 - Shopify development store
-- SQLite for local development
+- PostgreSQL database for local development and production
 
 Optional production integrations:
 
@@ -75,6 +75,7 @@ Optional production integrations:
 Create `.env` with the Shopify CLI values plus any optional integrations:
 
 ```env
+DATABASE_URL=postgresql://USER:PASSWORD@HOST:PORT/DATABASE?schema=public
 SHOPIFY_API_KEY=
 SHOPIFY_API_SECRET=
 SHOPIFY_APP_URL=https://your-production-domain.example
@@ -98,6 +99,8 @@ Accounting callback URLs to register with providers:
 
 For Vercel, set `SHOPIFY_APP_URL` to the stable production deployment URL. The app can fall back to Vercel's system URL variables, but Shopify OAuth, billing, and webhook callbacks should use one canonical production URL.
 
+Also set `DATABASE_URL` in Vercel to a writable PostgreSQL database such as Neon, Supabase, Vercel Postgres, or another managed Postgres provider. Do not use SQLite or a local file database in Vercel; Shopify sessions must persist across serverless invocations.
+
 ## Development
 
 Install dependencies:
@@ -105,6 +108,8 @@ Install dependencies:
 ```shell
 npm install
 ```
+
+Set `DATABASE_URL` to a local or managed PostgreSQL database.
 
 Prepare Prisma:
 
@@ -145,7 +150,7 @@ Shopify session data is stored in `Session`.
 Before App Store submission:
 
 - Replace tunnel URLs in `shopify.app.toml` with the production app URL.
-- Use a production database instead of local SQLite.
+- Verify `DATABASE_URL` points to the production PostgreSQL database. The build script runs `prisma migrate deploy` so the `Session` and SmartBill tables exist before the app starts.
 - Configure private file storage.
 - Verify Xero and QuickBooks OAuth credentials and callback URLs.
 - Test OCR against real supplier invoice samples.

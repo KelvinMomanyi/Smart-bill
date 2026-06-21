@@ -19,11 +19,11 @@ ALTER TABLE "Invoice" ADD COLUMN "accountingStatus" TEXT NOT NULL DEFAULT 'NOT_E
 ALTER TABLE "Invoice" ADD COLUMN "discrepancySummary" TEXT;
 
 ALTER TABLE "InvoiceItem" ADD COLUMN "sku" TEXT;
-ALTER TABLE "InvoiceItem" ADD COLUMN "confidence" REAL;
+ALTER TABLE "InvoiceItem" ADD COLUMN "confidence" DOUBLE PRECISION;
 ALTER TABLE "InvoiceItem" ADD COLUMN "matchedProductTitle" TEXT;
 
 CREATE TABLE "ShopSettings" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "shop" TEXT NOT NULL,
     "billingPlan" TEXT NOT NULL DEFAULT 'GROWTH',
     "accountingPlatform" TEXT,
@@ -31,8 +31,10 @@ CREATE TABLE "ShopSettings" (
     "autoSyncCogs" BOOLEAN NOT NULL DEFAULT false,
     "requireReview" BOOLEAN NOT NULL DEFAULT true,
     "defaultCurrency" TEXT NOT NULL DEFAULT 'USD',
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "ShopSettings_pkey" PRIMARY KEY ("id")
 );
 
 CREATE UNIQUE INDEX "ShopSettings_shop_key" ON "ShopSettings"("shop");
