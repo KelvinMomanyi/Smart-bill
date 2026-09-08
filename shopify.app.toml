@@ -3,7 +3,7 @@
 client_id = "619efa429740598f93a2ef8f8d711cca"
 name = "SmartBill"
 handle = "smartbill-1"
-application_url = "https://kinda-stronger-research-images.trycloudflare.com"
+application_url = "https://smart-bill-self.vercel.app/"
 embedded = true
 
 [build]
@@ -16,9 +16,9 @@ scopes = "write_products,read_products,write_inventory,read_inventory,read_order
 
 [auth]
 redirect_urls = [
-  "https://kinda-stronger-research-images.trycloudflare.com/auth/callback",
-  "https://kinda-stronger-research-images.trycloudflare.com/auth/shopify/callback",
-  "https://kinda-stronger-research-images.trycloudflare.com/api/auth/callback"
+  "https://smart-bill-self.vercel.app/auth/callback",
+  "https://smart-bill-self.vercel.app/auth/shopify/callback",
+  "https://smart-bill-self.vercel.app/api/auth/callback"
 ]
 
 [webhooks]

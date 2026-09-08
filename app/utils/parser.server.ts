@@ -25,6 +25,7 @@ export type ParsedInvoice = {
   tax?: number;
   total: number;
   items: ParsedInvoiceItem[];
+  warnings?: string[];
 };
 
 const currencyPattern = "(?:[$\\u20ac\\u00a3]|KES|USD|EUR|GBP|CAD|AUD)?";
@@ -38,20 +39,22 @@ function parseMoney(value?: string | null) {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function normalizeDate(raw?: string | null) {
+export function normalizeDate(raw?: string | null, dateOrder: "DMY" | "MDY" = "DMY") {
   if (!raw) return undefined;
 
   const trimmed = raw.trim().replace(/,/g, " ");
   const isoMatch = trimmed.match(/\d{4}-\d{1,2}-\d{1,2}/);
-  if (isoMatch) return new Date(isoMatch[0]).toISOString().slice(0, 10);
+  if (isoMatch) {
+    const [year, month, day] = isoMatch[0].split("-");
+    return checkedDate(year, month, day);
+  }
 
   const slashMatch = trimmed.match(/\d{1,2}[/-]\d{1,2}[/-]\d{2,4}/);
   if (slashMatch) {
     const [first, second, yearPart] = slashMatch[0].split(/[/-]/);
     const year = yearPart.length === 2 ? `20${yearPart}` : yearPart;
-    const month = first.padStart(2, "0");
-    const day = second.padStart(2, "0");
-    return `${year}-${month}-${day}`;
+    const dayFirst = Number(first) > 12 || (Number(second) <= 12 && dateOrder === "DMY");
+    return checkedDate(year, dayFirst ? second : first, dayFirst ? first : second);
   }
 
   const monthNameMatch = trimmed.match(
@@ -63,6 +66,12 @@ function normalizeDate(raw?: string | null) {
   }
 
   return undefined;
+}
+
+function checkedDate(year: string, month: string, day: string) {
+  const value = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  const date = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value ? value : undefined;
 }
 
 function findValue(lines: string[], patterns: RegExp[]) {
@@ -200,11 +209,10 @@ function parseItemLine(line: string): ParsedInvoiceItem | null {
     sku: skuMatch?.[1],
     name: description,
     description,
-    quantity: Math.max(1, Math.round(quantity)),
+    quantity,
     rate,
     price: rate,
     amount,
-    confidence: rate > 0 && amount > 0 ? 0.88 : 0.58,
   };
 }
 
@@ -242,13 +250,7 @@ function extractItems(lines: string[]) {
     }
   }
 
-  const seen = new Set<string>();
-  return items.filter((item) => {
-    const key = `${item.sku || item.name}-${item.quantity}-${item.price}-${item.amount}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  return items;
 }
 
 function findInvoiceNumber(lines: string[]) {
@@ -262,12 +264,12 @@ function findInvoiceNumber(lines: string[]) {
   return candidate;
 }
 
-function findInvoiceDate(lines: string[]) {
+function findInvoiceDate(lines: string[], dateOrder: "DMY" | "MDY") {
   for (const line of lines) {
     if (/(?:due|payment)\s+date/i.test(line)) continue;
 
     const labeled = line.match(/(?:invoice\s+date|\bdate)\s*:?\s*(.+)$/i);
-    const normalized = normalizeDate(labeled?.[1]);
+    const normalized = normalizeDate(labeled?.[1], dateOrder);
     if (normalized) return normalized;
   }
 
@@ -275,7 +277,7 @@ function findInvoiceDate(lines: string[]) {
     findValue(lines, [
       /\b(\d{4}-\d{1,2}-\d{1,2})\b/,
       /\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b/,
-    ]),
+    ]), dateOrder,
   );
 }
 
@@ -300,16 +302,16 @@ function findMoneyByLabel(
   return findMoneyOnLine(line);
 }
 
-export function parseInvoiceText(text: string): ParsedInvoice {
+export function parseInvoiceText(text: string, dateOrder: "DMY" | "MDY" = "DMY"): ParsedInvoice {
   const lines = text
     .split(/\r?\n/)
     .map((line) => line.replace(/\s+/g, " ").trim())
     .filter(Boolean);
 
   const dueDate = normalizeDate(
-    findValue(lines, [/(?:due\s+date|payment\s+due)\s*:?\s*(.+)$/i]),
+    findValue(lines, [/(?:due\s+date|payment\s+due)\s*:?\s*(.+)$/i]), dateOrder,
   );
-  const date = findInvoiceDate(lines);
+  const date = findInvoiceDate(lines, dateOrder);
   const subtotal = findMoneyByLabel(lines, /(?:subtotal|sub-total)\b/i);
   const tax = findMoneyByLabel(lines, /\b(?:tax|vat|gst)\b/i);
   const total =
@@ -336,5 +338,6 @@ export function parseInvoiceText(text: string): ParsedInvoice {
     tax,
     total,
     items: extractItems(lines),
+    warnings: date ? [] : ["Invoice date was missing or invalid; confirm the date before approval."],
   };
 }

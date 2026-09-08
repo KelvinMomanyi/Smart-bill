@@ -25,22 +25,36 @@ const invoice = {
 };
 
 test("formatForPlatform creates Xero accounts payable invoice payloads", () => {
-  const payload = formatForPlatform(invoice, "XERO");
+  const payload = formatForPlatform(invoice, "XERO", {
+    xeroAccountCode: "500",
+    xeroTaxType: "NONE",
+  });
 
   assert.equal(payload.Type, "ACCPAY");
   assert.equal(payload.Contact.Name, "Acme Packaging");
   assert.equal(payload.Reference, "PO-44");
   assert.equal(payload.DateString, "2026-06-10");
   assert.equal(payload.LineItems[0].UnitAmount, 4.5);
+  assert.equal(payload.LineItems[0].AccountCode, "500");
+  assert.equal(payload.LineItems[0].TaxType, "NONE");
 });
 
 test("formatForPlatform creates QuickBooks bill payloads", () => {
-  const payload = formatForPlatform(invoice, "QUICKBOOKS");
+  const payload = formatForPlatform(invoice, "QUICKBOOKS", {
+    quickBooksVendorRef: { value: "42", name: "Acme Packaging" },
+    quickBooksExpenseAccountRef: { value: "87", name: "Cost of Goods Sold" },
+  }) as any;
 
+  assert.equal(payload.VendorRef.value, "42");
   assert.equal(payload.VendorRef.name, "Acme Packaging");
   assert.equal(payload.DocNumber, "INV-1007");
   assert.equal(payload.TxnDate, "2026-06-10");
   assert.equal(payload.Line[0].Amount, 54);
+  assert.equal(payload.Line[0].DetailType, "AccountBasedExpenseLineDetail");
+  assert.equal(
+    payload.Line[0].AccountBasedExpenseLineDetail.AccountRef.value,
+    "87",
+  );
 });
 
 test("formatForPlatform creates CSV package records", () => {

@@ -88,14 +88,26 @@ FIREBASE_STORAGE_BUCKET=
 
 XERO_CLIENT_ID=
 XERO_CLIENT_SECRET=
+XERO_PURCHASE_ACCOUNT_CODE=300
+XERO_TAX_TYPE=NONE
 QB_CLIENT_ID=
 QB_CLIENT_SECRET=
+QB_EXPENSE_ACCOUNT_ID=
+QB_EXPENSE_ACCOUNT_NAME=Cost of Goods Sold
+QB_TAX_CODE_ID=
 ```
 
 Accounting callback URLs to register with providers:
 
 - `https://your-app-url/accounting/xero/callback`
 - `https://your-app-url/accounting/quickbooks/callback`
+
+Accounting export mapping:
+
+- `XERO_PURCHASE_ACCOUNT_CODE` is the Xero account code used on supplier bill line items. It defaults to `300` when unset.
+- `XERO_TAX_TYPE` is added to Xero bill line items. It defaults to `NONE` when unset.
+- `QB_EXPENSE_ACCOUNT_ID` is the preferred QuickBooks account id for bill line items. If omitted, SmartBill tries `QB_EXPENSE_ACCOUNT_NAME`, then common active expense accounts.
+- `QB_TAX_CODE_ID` is optional and only needed when your QuickBooks company requires a tax code on bill lines.
 
 For Vercel, set `SHOPIFY_APP_URL` to the stable production deployment URL. The app can fall back to Vercel's system URL variables, but Shopify OAuth, billing, and webhook callbacks should use one canonical production URL.
 
@@ -152,6 +164,6 @@ Before App Store submission:
 - Replace tunnel URLs in `shopify.app.toml` with the production app URL.
 - Verify `DATABASE_URL` points to the production PostgreSQL database. The build script runs `prisma migrate deploy` so the `Session` and SmartBill tables exist before the app starts.
 - Configure private file storage.
-- Verify Xero and QuickBooks OAuth credentials and callback URLs.
+- Verify Xero and QuickBooks OAuth credentials, callback URLs, and accounting mapping variables.
 - Test OCR against real supplier invoice samples.
 - Add App Store listing copy focused on supplier invoice automation, PO reconciliation, and inventory cost control.

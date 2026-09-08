@@ -1,4 +1,4 @@
-// This is your Prisma schema file,
+﻿// This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
 generator client {
@@ -62,12 +62,10 @@ model PurchaseOrder {
   expectedDate   DateTime?
   totalAmount    Float?
   notes          String?
-  currency       String              @default("USD")
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
   items          PurchaseOrderItem[]
   linkedInvoices Invoice[]
-  receipts       GoodsReceipt[]
 
   @@unique([shop, poNumber])
 }
@@ -80,11 +78,9 @@ model PurchaseOrderItem {
   shopifyProductId String?
   shopifyVariantId String?
   name             String
-  expectedQty      Float
-  receivedQty      Float         @default(0)
-  billedQty        Float         @default(0)
+  expectedQty      Int
+  receivedQty      Int           @default(0)
   expectedRate     Float?
-  receiptItems     GoodsReceiptItem[]
 }
 
 model Invoice {
@@ -110,19 +106,9 @@ model Invoice {
   cogsSyncStatus     String         @default("NOT_REQUESTED") // NOT_REQUESTED, SYNCED, FAILED
   accountingStatus   String         @default("NOT_EXPORTED") // NOT_EXPORTED, EXPORTED
   discrepancySummary String?
-  documentHash       String?
-  identityKey        String?
-  approvedAt         DateTime?
-  approvedBy         String?
-  revision           Int            @default(0)
-  exports            AccountingExport[]
-  costChanges        CostChange[]
   createdAt          DateTime       @default(now())
   updatedAt          DateTime       @updatedAt
   items              InvoiceItem[]
-  @@unique([shop, documentHash])
-  @@unique([shop, identityKey])
-  @@index([shop, createdAt])
 }
 
 model InvoiceItem {
@@ -133,146 +119,24 @@ model InvoiceItem {
   shopifyVariantId    String? // Mapped Shopify Variant ID
   sku                 String?
   name                String
-  quantity            Float   @default(1)
+  quantity            Int     @default(1)
   price               Float // Unit price (Rate)
   amount              Float? // Total amount for this line item
   confidence          Float?
   matchedProductTitle String?
-  matchConfirmed      Boolean @default(false)
 }
 
 model ShopSettings {
   id                  String   @id @default(uuid())
   shop                String   @unique
-  billingPlan         String   @default("STARTER")
+  billingPlan         String   @default("GROWTH")
   accountingPlatform  String?
   accountingConnected Boolean  @default(false)
   autoSyncCogs        Boolean  @default(false)
   requireReview       Boolean  @default(true)
   defaultCurrency     String   @default("USD")
-  dateOrder           String   @default("DMY")
-  xeroAccountCode     String?
-  xeroTaxType         String?
-  quickBooksAccountId String?
-  quickBooksTaxCodeId String?
-  inboundAlias        String?  @unique
-  minutesSavedPerInvoice Float @default(0)
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
-}
-
-model AccountingExport {
-  id          String   @id @default(uuid())
-  shop        String
-  invoiceId   String
-  invoice     Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  platform    String
-  status      String   @default("PENDING")
-  requestKey  String   @unique @default(uuid())
-  remoteId    String?
-  payload     Json?
-  error       String?
-  attemptedAt DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  @@unique([invoiceId, platform])
-  @@index([shop, status])
-}
-
-model CostChange {
-  id              String   @id @default(uuid())
-  shop            String
-  invoiceId       String
-  invoice         Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  invoiceItemId   String
-  inventoryItemId String
-  variantId       String
-  previousCost    Float?
-  newCost         Float
-  currency        String
-  status          String   @default("PENDING")
-  actor           String
-  error           String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  @@unique([invoiceId, invoiceItemId])
-  @@index([shop, createdAt])
-}
-
-model AuditEvent {
-  id        String   @id @default(uuid())
-  shop      String
-  invoiceId String?
-  actor     String
-  action    String
-  detail    Json?
-  createdAt DateTime @default(now())
-  @@index([shop, createdAt])
-  @@index([invoiceId])
-}
-
-model SupplierMapping {
-  id        String   @id @default(uuid())
-  shop      String
-  vendorKey String
-  itemKey   String
-  variantId String
-  title     String
-  updatedAt DateTime @updatedAt
-  @@unique([shop, vendorKey, itemKey])
-}
-
-model GoodsReceipt {
-  id              String   @id @default(uuid())
-  shop            String
-  purchaseOrderId String
-  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
-  reference       String?
-  requestKey      String   @unique
-  actor           String
-  receivedAt      DateTime @default(now())
-  items           GoodsReceiptItem[]
-  @@index([shop, receivedAt])
-}
-
-model GoodsReceiptItem {
-  id                  String @id @default(uuid())
-  receiptId           String
-  receipt             GoodsReceipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
-  purchaseOrderItemId  String
-  purchaseOrderItem    PurchaseOrderItem @relation(fields: [purchaseOrderItemId], references: [id], onDelete: Cascade)
-  quantity            Float
-}
-
-model InvoiceJob {
-  id              String   @id @default(uuid())
-  shop            String
-  documentHash    String
-  storageKey      String
-  filename        String
-  contentType     String
-  vendorName      String?
-  purchaseOrderId String?
-  status          String   @default("QUEUED")
-  pageCount       Int      @default(0)
-  attempts        Int      @default(0)
-  invoiceId       String?
-  error           String?
-  availableAt     DateTime @default(now())
-  lockedAt        DateTime?
-  leaseToken      String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  @@unique([shop, documentHash])
-  @@index([status, availableAt])
-}
-
-model MonthlyUsage {
-  id        String   @id @default(uuid())
-  shop      String
-  month     String
-  invoices  Int      @default(0)
-  @@unique([shop, month])
 }
 
 model AccountingConnection {

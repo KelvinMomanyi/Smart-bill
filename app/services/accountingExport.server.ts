@@ -1,16 +1,51 @@
 import prisma from "../db.server";
-import { refreshQuickBooksToken } from "../utils/quickbook";
+import {
+  createQuickBooksBill,
+  getOrCreateQuickBooksVendorRef,
+  refreshQuickBooksToken,
+  resolveQuickBooksExpenseAccountRef,
+  type QuickBooksRef,
+} from "../utils/quickbook";
 import { refreshXeroToken } from "../utils/xero";
 
 export type AccountingPlatform = "XERO" | "QUICKBOOKS" | "CSV";
 
 type ExportMode = "CSV_PACKAGE" | "LIVE_SYNC";
 
+type AccountingFormatOptions = {
+  quickBooksExpenseAccountRef?: QuickBooksRef;
+  quickBooksVendorRef?: QuickBooksRef;
+  xeroAccountCode?: string;
+  xeroTaxType?: string;
+};
+
 function isoDate(value?: Date | string | null) {
   if (!value) return undefined;
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return undefined;
   return date.toISOString().slice(0, 10);
+}
+
+function money(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function envValue(name: string) {
+  return process.env[name]?.trim() || undefined;
+}
+
+function configuredXeroAccountCode() {
+  return envValue("XERO_PURCHASE_ACCOUNT_CODE") || "300";
+}
+
+function configuredXeroTaxType() {
+  return envValue("XERO_TAX_TYPE") || "NONE";
+}
+
+function configuredQuickBooksAccountRef(): QuickBooksRef | undefined {
+  const value = envValue("QB_EXPENSE_ACCOUNT_ID");
+  if (!value) return undefined;
+  return { value, name: envValue("QB_EXPENSE_ACCOUNT_NAME") };
 }
 
 async function readErrorBody(response: Response) {
@@ -89,28 +124,7 @@ async function postToXero(connection: any, payload: any) {
 }
 
 async function postToQuickBooks(connection: any, payload: any) {
-  if (!connection.realmId) throw new Error("QuickBooks realmId is missing");
-
-  const response = await fetch(
-    `https://quickbooks.api.intuit.com/v3/company/${connection.realmId}/bill`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${connection.accessToken}`,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    },
-  );
-
-  if (!response.ok) {
-    throw new Error(
-      `QuickBooks export failed: ${response.status} ${await readErrorBody(response)}`,
-    );
-  }
-
-  return response.json();
+  return createQuickBooksBill(connection, payload);
 }
 
 export async function exportInvoiceToAccounting(
@@ -119,7 +133,7 @@ export async function exportInvoiceToAccounting(
   platform: AccountingPlatform,
 ) {
   const invoice = await getInvoice(shop, invoiceId);
-  const payload = formatForPlatform(invoice, platform);
+  let payload = formatForPlatform(invoice, platform);
   let mode: ExportMode = "CSV_PACKAGE";
   let remoteResponse: unknown = null;
 
@@ -133,6 +147,18 @@ export async function exportInvoiceToAccounting(
     }
 
     const connection = await refreshConnectionIfNeeded(storedConnection);
+    if (platform === "QUICKBOOKS") {
+      payload = formatForPlatform(invoice, platform, {
+        quickBooksVendorRef: await getOrCreateQuickBooksVendorRef(
+          connection,
+          invoice.vendor?.name || "Unknown Vendor",
+        ),
+        quickBooksExpenseAccountRef:
+          configuredQuickBooksAccountRef() ||
+          (await resolveQuickBooksExpenseAccountRef(connection)),
+      });
+    }
+
     remoteResponse =
       platform === "XERO"
         ? await postToXero(connection, payload)
@@ -157,14 +183,23 @@ function baseLineItems(invoice: any) {
     sku: item.sku,
     quantity: item.quantity,
     unitAmount: item.price,
-    amount: item.amount || item.price * item.quantity,
+    amount: money(item.amount || item.price * item.quantity),
   }));
 }
 
-export function formatForPlatform(invoice: any, platform: AccountingPlatform) {
+function lineDescription(item: any) {
+  return item.sku ? `${item.sku} - ${item.description}` : item.description;
+}
+
+export function formatForPlatform(
+  invoice: any,
+  platform: AccountingPlatform,
+  options: AccountingFormatOptions = {},
+) {
   const lineItems = baseLineItems(invoice);
 
   if (platform === "XERO") {
+    const taxType = options.xeroTaxType || configuredXeroTaxType();
     return {
       Type: "ACCPAY",
       Contact: { Name: invoice.vendor?.name || "Unknown Vendor" },
@@ -173,18 +208,29 @@ export function formatForPlatform(invoice: any, platform: AccountingPlatform) {
       DateString: isoDate(invoice.date),
       DueDateString: isoDate(invoice.dueDate || invoice.date),
       CurrencyCode: invoice.currency || "USD",
+      LineAmountTypes: "Exclusive",
       LineItems: lineItems.map((item: any) => ({
-        Description: item.sku ? `${item.sku} - ${item.description}` : item.description,
+        Description: lineDescription(item),
         Quantity: item.quantity,
         UnitAmount: item.unitAmount,
-        AccountCode: "300",
+        AccountCode: options.xeroAccountCode || configuredXeroAccountCode(),
+        ...(taxType ? { TaxType: taxType } : {}),
       })),
     };
   }
 
   if (platform === "QUICKBOOKS") {
+    const vendorName = invoice.vendor?.name || "Unknown Vendor";
+    const vendorRef = options.quickBooksVendorRef || { name: vendorName };
+    const accountRef =
+      options.quickBooksExpenseAccountRef ||
+      configuredQuickBooksAccountRef() || {
+        name: envValue("QB_EXPENSE_ACCOUNT_NAME") || "Cost of Goods Sold",
+      };
+    const taxCodeId = envValue("QB_TAX_CODE_ID");
+
     return {
-      VendorRef: { name: invoice.vendor?.name || "Unknown Vendor" },
+      VendorRef: vendorRef,
       DocNumber: invoice.invoiceNumber,
       PrivateNote: invoice.purchaseOrder?.poNumber ? `PO ${invoice.purchaseOrder.poNumber}` : undefined,
       TxnDate: isoDate(invoice.date),
@@ -192,12 +238,12 @@ export function formatForPlatform(invoice: any, platform: AccountingPlatform) {
       CurrencyRef: { value: invoice.currency || "USD" },
       Line: lineItems.map((item: any) => ({
         Amount: item.amount,
-        DetailType: "ItemBasedExpenseLineDetail",
-        Description: item.description,
-        ItemBasedExpenseLineDetail: {
-          ItemRef: { name: item.sku || item.description },
-          Qty: item.quantity,
-          UnitPrice: item.unitAmount,
+        DetailType: "AccountBasedExpenseLineDetail",
+        Description: lineDescription(item),
+        AccountBasedExpenseLineDetail: {
+          AccountRef: accountRef,
+          BillableStatus: "NotBillable",
+          ...(taxCodeId ? { TaxCodeRef: { value: taxCodeId } } : {}),
         },
       })),
     };

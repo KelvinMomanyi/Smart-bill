@@ -1,143 +1,42 @@
 import prisma from "../db.server";
-import type { Invoice, InvoiceItem } from "@prisma/client";
-
-type InvoiceWithItems = Invoice & { items: InvoiceItem[] };
-
-function normalized(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+import { normalizedKey } from "../utils/invoiceRules";
+export type MatchLine = { sku?: string | null; name: string; quantity: number; price: number };
+export function matchPoLine(item: MatchLine, lines: { id: string; sku?: string | null; name: string }[]) {
+  const matches = lines.filter(line => item.sku && line.sku
+    ? normalizedKey(item.sku) === normalizedKey(line.sku)
+    : normalizedKey(item.name) === normalizedKey(line.name));
+  return matches.length === 1 ? matches[0] : null;
 }
-
-function tokenScore(left: string, right: string) {
-  const leftTokens = new Set(normalized(left).split(/\s+/).filter(Boolean));
-  const rightTokens = new Set(normalized(right).split(/\s+/).filter(Boolean));
-  if (leftTokens.size === 0 || rightTokens.size === 0) return 0;
-
-  let overlap = 0;
-  for (const token of leftTokens) {
-    if (rightTokens.has(token)) overlap += 1;
-  }
-
-  return overlap / Math.max(leftTokens.size, rightTokens.size);
-}
-
-function namesMatch(left: string, right: string) {
-  const a = normalized(left);
-  const b = normalized(right);
-  return a.includes(b) || b.includes(a) || tokenScore(a, b) >= 0.5;
-}
-
-function itemsMatch(
-  invoiceItem: InvoiceItem,
-  poItem: { name: string; sku?: string | null },
-) {
-  if (invoiceItem.sku && poItem.sku) {
-    return normalized(invoiceItem.sku) === normalized(poItem.sku);
-  }
-
-  return namesMatch(invoiceItem.name, poItem.name);
-}
-
-function moneyChanged(expected?: number | null, actual?: number | null) {
-  if (expected == null || actual == null) return false;
-  return Math.abs(expected - actual) > 0.01;
-}
-
 export async function reconcileInvoiceWithPO(invoiceId: string, purchaseOrderId: string) {
-  const invoice = await prisma.invoice.findUnique({
-    where: { id: invoiceId },
-    include: { items: true },
-  });
-
-  if (!invoice) throw new Error("Invoice not found");
-
-  const po = await prisma.purchaseOrder.findUnique({
-    where: { id: purchaseOrderId },
-    include: {
-      items: true,
-      linkedInvoices: { include: { items: true } },
-    },
-  });
-
-  if (!po) throw new Error("Purchase order not found");
-  if (invoice.shop !== po.shop) throw new Error("Invoice and purchase order belong to different shops");
-
-  await prisma.invoice.update({
-    where: { id: invoiceId },
-    data: { purchaseOrderId },
-  });
-
-  const allLinkedInvoices: InvoiceWithItems[] = po.linkedInvoices.some((linked) => linked.id === invoice.id)
-    ? po.linkedInvoices
-    : [...po.linkedInvoices, invoice];
-
+  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId }, include: { items: true } });
+  if (!invoice) throw new Error("Invoice not found.");
+  const po = await prisma.purchaseOrder.findFirst({ where: { id: purchaseOrderId, shop: invoice.shop },
+    include: { items: true, linkedInvoices: { include: { items: true } } } });
+  if (!po) throw new Error("Purchase order not found.");
+  const linked = po.linkedInvoices.some(i => i.id === invoice.id) ? po.linkedInvoices : [...po.linkedInvoices, invoice];
+  const billed = new Map<string, number>();
   const discrepancies: string[] = [];
-  let totalExpectedItems = 0;
-  let totalReceivedItems = 0;
-
-  for (const poItem of po.items) {
-    totalExpectedItems += poItem.expectedQty;
-
-    const matchingInvoiceItems = allLinkedInvoices.flatMap((linkedInvoice) =>
-      linkedInvoice.items.filter((invoiceItem) => itemsMatch(invoiceItem, poItem)),
-    );
-
-    const receivedQty = matchingInvoiceItems.reduce((sum, item) => sum + item.quantity, 0);
-    totalReceivedItems += receivedQty;
-
-    await prisma.purchaseOrderItem.update({
-      where: { id: poItem.id },
-      data: { receivedQty },
-    });
-
-    if (receivedQty > poItem.expectedQty) {
-      discrepancies.push(
-        `Quantity overage for ${poItem.name}: expected ${poItem.expectedQty}, received ${receivedQty}`,
-      );
-    }
-
-    for (const item of matchingInvoiceItems) {
-      if (moneyChanged(poItem.expectedRate, item.price)) {
-        discrepancies.push(
-          `Price mismatch for ${poItem.name}: expected ${poItem.expectedRate?.toFixed(2)}, got ${item.price.toFixed(2)}`,
-        );
-      }
+  for (const bill of linked) {
+    if (bill.currency !== po.currency) discrepancies.push(`Invoice ${bill.invoiceNumber || bill.id} currency differs from PO currency ${po.currency}.`);
+    for (const item of bill.items) {
+      const matched = matchPoLine(item, po.items);
+      if (!matched) { discrepancies.push(`Unmatched or ambiguous item: ${item.name}.`); continue; }
+      billed.set(matched.id, (billed.get(matched.id) || 0) + item.quantity);
+      const row = po.items.find(i => i.id === matched.id)!;
+      if (row.expectedRate != null && Math.abs(row.expectedRate - item.price) > 0.011) discrepancies.push(`Price mismatch for ${row.name}: ordered ${row.expectedRate}, billed ${item.price}.`);
     }
   }
-
-  for (const linkedInvoice of allLinkedInvoices) {
-    for (const invoiceItem of linkedInvoice.items) {
-      const matched = po.items.some((poItem) => itemsMatch(invoiceItem, poItem));
-      if (!matched) {
-        discrepancies.push(`Unexpected item on invoice ${linkedInvoice.invoiceNumber || linkedInvoice.id}: ${invoiceItem.name}`);
-      }
-    }
+  for (const row of po.items) {
+    const quantity = billed.get(row.id) || 0;
+    if (quantity > row.expectedQty + 0.00001) discrepancies.push(`Billed quantity exceeds ordered quantity for ${row.name}.`);
+    if (quantity > row.receivedQty + 0.00001) discrepancies.push(`${row.name}: billed ${quantity}, physically received ${row.receivedQty}.`);
   }
-
-  let newStatus = "OPEN";
-  if (discrepancies.length > 0) {
-    newStatus = "MISMATCH";
-  } else if (totalReceivedItems > 0 && totalReceivedItems < totalExpectedItems) {
-    newStatus = "PARTIAL";
-  } else if (totalExpectedItems > 0 && totalReceivedItems >= totalExpectedItems) {
-    newStatus = "FULFILLED";
-  }
-
-  await prisma.purchaseOrder.update({
-    where: { id: purchaseOrderId },
-    data: { status: newStatus },
-  });
-
-  await prisma.invoice.update({
-    where: { id: invoiceId },
-    data: {
-      reviewStatus: discrepancies.length > 0 ? "NEEDS_ATTENTION" : "PENDING_REVIEW",
-      discrepancySummary: discrepancies.join("\n") || null,
-    },
-  });
-
-  return {
-    success: true,
-    status: newStatus,
-    discrepancies,
-  };
+  const complete = po.items.length > 0 && po.items.every(i => i.receivedQty >= i.expectedQty);
+  const status = discrepancies.length ? "MISMATCH" : complete ? "FULFILLED" : po.items.some(i => i.receivedQty > 0) ? "PARTIAL" : "OPEN";
+  await prisma.$transaction([
+    ...po.items.map(row => prisma.purchaseOrderItem.update({ where: { id: row.id }, data: { billedQty: billed.get(row.id) || 0 } })),
+    prisma.purchaseOrder.update({ where: { id: po.id }, data: { status } }),
+    prisma.invoice.update({ where: { id: invoice.id }, data: { purchaseOrderId: po.id, discrepancySummary: discrepancies.join("\n") || null } }),
+  ]);
+  return { success: true, status, discrepancies };
 }

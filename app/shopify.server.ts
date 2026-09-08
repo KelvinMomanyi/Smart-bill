@@ -8,11 +8,8 @@ import {
 } from "@shopify/shopify-app-remix/server";
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
 import prisma from "./db.server";
-
-export const SMARTBILL_PLANS = {
-  GROWTH: "SmartBill Growth",
-  SCALE: "SmartBill Scale",
-} as const;
+import { PLANS, SMARTBILL_PLANS, TRIAL_DAYS } from "./utils/plans";
+export { SMARTBILL_PLANS } from "./utils/plans";
 
 function normalizeAppUrl(value?: string | null) {
   const trimmed = value?.trim();
@@ -60,24 +57,25 @@ const shopify = shopifyApp({
     connectionRetryIntervalMs: 2500,
   }),
   distribution: AppDistribution.AppStore,
+  useOnlineTokens: true,
   billing: {
-    [SMARTBILL_PLANS.GROWTH]: {
-      trialDays: 14,
+    [SMARTBILL_PLANS.STARTER]: {
+      trialDays: TRIAL_DAYS,
       replacementBehavior: BillingReplacementBehavior.ApplyImmediately,
       lineItems: [
         {
-          amount: 99,
+          amount: PLANS.STARTER.price,
           currencyCode: "USD",
           interval: BillingInterval.Every30Days,
         },
       ],
     },
-    [SMARTBILL_PLANS.SCALE]: {
-      trialDays: 14,
+    [SMARTBILL_PLANS.GROWTH]: {
+      trialDays: TRIAL_DAYS,
       replacementBehavior: BillingReplacementBehavior.ApplyImmediately,
       lineItems: [
         {
-          amount: 249,
+          amount: PLANS.GROWTH.price,
           currencyCode: "USD",
           interval: BillingInterval.Every30Days,
         },

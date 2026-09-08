@@ -16,7 +16,10 @@ function parseNumber(value?: string | number | null) {
 }
 
 function normalizedQty(value?: string | number | null) {
-  return Math.max(1, Math.round(parseNumber(value) || 1));
+  const quantity = parseNumber(value);
+  if (quantity == null) return 1;
+  if (quantity <= 0) throw new Error("Purchase order quantities must be positive.");
+  return quantity;
 }
 
 function cleanedText(value?: unknown) {
