@@ -15,6 +15,7 @@ database.sqlite
 .env.*
 !.env.example
 ocr-service-account.json
+/.local-backups/
 
 
 
