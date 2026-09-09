@@ -12,6 +12,7 @@ import {
 import prisma from "../db.server";
 import { formatMoney } from "../utils/format";
 import { requireAdmin } from "../utils/rbac.server";
+import { currencyTotals } from "../utils/invoiceRules";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await requireAdmin(request);
@@ -37,28 +38,45 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   ]);
 
   const vendorAnalytics = vendors
-    .map((vendor) => {
-      const totalSpend = vendor.invoices.reduce((sum, inv) => sum + (inv.total || 0), 0);
-      const invoiceCount = vendor.invoices.length;
-      const averageInvoice = invoiceCount > 0 ? totalSpend / invoiceCount : 0;
-      const mismatchCount = vendor.purchaseOrders.filter((po) => po.status === "MISMATCH").length;
-      return {
-        id: vendor.id,
-        name: vendor.name,
-        totalSpend,
-        invoiceCount,
-        averageInvoice,
-        purchaseOrderCount: vendor.purchaseOrders.length,
-        mismatchCount,
-      };
-    })
-    .sort((a, b) => b.totalSpend - a.totalSpend);
+    .flatMap((vendor) =>
+      currencyTotals(vendor.invoices).map(({ currency, total: totalSpend }) => {
+        const invoiceCount = vendor.invoices.filter(
+          (i) => i.currency === currency,
+        ).length;
+        const averageInvoice = invoiceCount > 0 ? totalSpend / invoiceCount : 0;
+        const mismatchCount = vendor.purchaseOrders.filter(
+          (po) => po.status === "MISMATCH",
+        ).length;
+        return {
+          id: vendor.id + currency,
+          currency,
+          name: vendor.name,
+          totalSpend,
+          invoiceCount,
+          averageInvoice,
+          purchaseOrderCount: vendor.purchaseOrders.length,
+          mismatchCount,
+        };
+      }),
+    )
+    .sort(
+      (a, b) =>
+        a.currency.localeCompare(b.currency) || b.totalSpend - a.totalSpend,
+    );
 
-  const totalSpend = invoices.reduce((sum, invoice) => sum + invoice.total, 0);
-  const needsAttention = invoices.filter((invoice) => invoice.reviewStatus === "NEEDS_ATTENTION").length;
-  const syncedCogs = invoices.filter((invoice) => invoice.cogsSyncStatus === "SYNCED").length;
-  const exported = invoices.filter((invoice) => invoice.accountingStatus === "EXPORTED").length;
-  const mismatchedPOs = purchaseOrders.filter((po) => po.status === "MISMATCH").length;
+  const totalSpend = currencyTotals(invoices);
+  const needsAttention = invoices.filter(
+    (invoice) => invoice.reviewStatus === "NEEDS_ATTENTION",
+  ).length;
+  const syncedCogs = invoices.filter(
+    (invoice) => invoice.cogsSyncStatus === "SYNCED",
+  ).length;
+  const exported = invoices.filter(
+    (invoice) => invoice.accountingStatus === "EXPORTED",
+  ).length;
+  const mismatchedPOs = purchaseOrders.filter(
+    (po) => po.status === "MISMATCH",
+  ).length;
 
   return json({
     vendorAnalytics,
@@ -87,22 +105,37 @@ export default function AnalyticsDashboard() {
     vendor.name,
     vendor.invoiceCount.toString(),
     vendor.purchaseOrderCount.toString(),
-    formatMoney(vendor.totalSpend),
-    formatMoney(vendor.averageInvoice),
-    <HealthBadge key={vendor.id} value={vendor.mismatchCount} total={vendor.purchaseOrderCount} />,
+    formatMoney(vendor.totalSpend, vendor.currency),
+    formatMoney(vendor.averageInvoice, vendor.currency),
+    <HealthBadge
+      key={vendor.id}
+      value={vendor.mismatchCount}
+      total={vendor.purchaseOrderCount}
+    />,
   ]);
 
   return (
-    <Page title="Vendor analytics" subtitle="Track supplier spend, invoice quality, PO mismatches, and automation throughput.">
+    <Page
+      title="Vendor analytics"
+      subtitle="Track supplier spend, invoice quality, PO mismatches, and automation throughput."
+    >
       <BlockStack gap="500">
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "16px" }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+            gap: "16px",
+          }}
+        >
           <Card>
             <BlockStack gap="200">
               <Text as="p" tone="subdued">
                 Spend captured
               </Text>
               <Text as="p" variant="headingLg">
-                {formatMoney(metrics.totalSpend)}
+                {metrics.totalSpend
+                  .map((t) => formatMoney(t.total, t.currency))
+                  .join(" / ") || "No invoices"}
               </Text>
             </BlockStack>
           </Card>
@@ -167,13 +200,28 @@ export default function AnalyticsDashboard() {
                 </Text>
                 {rows.length > 0 ? (
                   <DataTable
-                    columnContentTypes={["text", "numeric", "numeric", "numeric", "numeric", "text"]}
-                    headings={["Vendor", "Invoices", "POs", "Spend", "Avg invoice", "Mismatches"]}
+                    columnContentTypes={[
+                      "text",
+                      "numeric",
+                      "numeric",
+                      "numeric",
+                      "numeric",
+                      "text",
+                    ]}
+                    headings={[
+                      "Vendor",
+                      "Invoices",
+                      "POs",
+                      "Spend",
+                      "Avg invoice",
+                      "Mismatches",
+                    ]}
                     rows={rows}
                   />
                 ) : (
                   <Text as="p" tone="subdued">
-                    Capture invoices and create purchase orders to generate vendor analytics.
+                    Capture invoices and create purchase orders to generate
+                    vendor analytics.
                   </Text>
                 )}
               </BlockStack>

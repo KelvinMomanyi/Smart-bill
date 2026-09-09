@@ -1,0 +1,47 @@
+.smartbill-workspace label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+.smartbill-workspace
+  input:not([class]):not([type="hidden"]):not([type="checkbox"]),
+.smartbill-workspace select:not([class]),
+.smartbill-workspace textarea:not([class]) {
+  min-height: 36px;
+  border: 1px solid #8a8a8a;
+  border-radius: 8px;
+  background: white;
+  color: #202223;
+  padding: 7px 10px;
+  font: inherit;
+  max-width: 100%;
+}
+.smartbill-workspace input:not([class]):not([type="checkbox"]) {
+  flex: 1 1 180px;
+}
+.smartbill-workspace input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: #303030;
+}
+.smartbill-workspace :is(input, select, textarea):focus-visible {
+  outline: 2px solid #005bd3;
+  outline-offset: 2px;
+}
+.smartbill-workspace :is(input, select, textarea):disabled {
+  background: #f1f1f1;
+  color: #666;
+}
+.smartbill-workspace form {
+  max-width: 100%;
+}
+.smartbill-workspace fieldset {
+  min-width: 0;
+}
+.smartbill-workspace details > summary {
+  cursor: pointer;
+  padding-block: 8px;
+}

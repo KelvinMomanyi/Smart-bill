@@ -8,7 +8,8 @@ export type ParsedPoItem = {
 };
 
 function parseNumber(value?: string | number | null) {
-  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  if (typeof value === "number")
+    return Number.isFinite(value) ? value : undefined;
   if (!value) return undefined;
 
   const parsed = Number.parseFloat(String(value).replace(/[$,\s]/g, ""));
@@ -18,7 +19,8 @@ function parseNumber(value?: string | number | null) {
 function normalizedQty(value?: string | number | null) {
   const quantity = parseNumber(value);
   if (quantity == null) return 1;
-  if (quantity <= 0) throw new Error("Purchase order quantities must be positive.");
+  if (quantity <= 0)
+    throw new Error("Purchase order quantities must be positive.");
   return quantity;
 }
 
@@ -34,7 +36,7 @@ export function parseStructuredPoItems(value?: string | null): ParsedPoItem[] {
     if (!Array.isArray(parsed)) return [];
 
     return parsed
-      .map((item) => {
+      .map((item): ParsedPoItem | null => {
         const name = cleanedText(item?.name);
         if (!name) return null;
 
@@ -58,7 +60,7 @@ export function parsePoItems(text: string): ParsedPoItem[] {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .map((line) => {
+    .map((line): ParsedPoItem | null => {
       const parts = line.includes("|") ? line.split("|") : line.split(",");
       if (parts.length >= 3) {
         const [nameOrSku, qty, rate] = parts.map((part) => part.trim());

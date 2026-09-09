@@ -1,317 +1,307 @@
-// app/services/cogs.server.ts
-import { authenticate } from "../shopify.server";
+import prisma from "../db.server";
+import { requireAdmin } from "../utils/rbac.server";
+import { requireSubscription } from "./billing.server";
+import { assertApproved, assertCurrencyMatch } from "../utils/invoiceRules";
+import { fetchShopCurrency } from "./invoiceWorkflow.server";
+import { variantsByIds } from "./invoiceReview.server";
+import { lockInvoice } from "./invoiceLock.server";
+import type { authenticate } from "../shopify.server";
 
-export interface SyncItem {
-  invoiceItemId?: string;
-  sku?: string | null;
-  shopifyProductId?: string | null;
-  shopifyVariantId?: string | null;
-  name: string;
-  price: number;
-}
-
-type ResolvedInventoryItem = {
-  productId?: string;
-  variantId: string;
-  inventoryItemId: string;
-  matchedProductTitle?: string;
-  matchedVariantTitle?: string;
-  sku?: string | null;
-  matchStrategy: "variant_id" | "sku" | "product_id" | "title";
-};
-
-async function graphqlJson(
-  admin: Awaited<ReturnType<typeof authenticate.admin>>["admin"],
-  query: string,
-  variables: Record<string, unknown>,
-) {
-  const response = await admin.graphql(query, { variables });
-  return response.json();
-}
-
-async function resolveByVariantId(
-  admin: Awaited<ReturnType<typeof authenticate.admin>>["admin"],
-  variantId: string,
-): Promise<ResolvedInventoryItem | null> {
-  const json = await graphqlJson(
-    admin,
+type Admin = Awaited<ReturnType<typeof authenticate.admin>>["admin"];
+async function writeCost(admin: Admin, inventoryItemId: string, cost: number) {
+  const response = await admin.graphql(
     `#graphql
-      query SmartBillVariantById($id: ID!) {
-        productVariant(id: $id) {
-          id
-          title
-          sku
-          product {
-            id
-            title
-          }
-          inventoryItem {
-            id
-          }
-        }
-      }`,
-    { id: variantId },
+    mutation SmartBillCost($id: ID!, $input: InventoryItemInput!) {
+      inventoryItemUpdate(id: $id, input: $input) { inventoryItem { id } userErrors { message } }
+    }`,
+    { variables: { id: inventoryItemId, input: { cost } } },
   );
-  const variant = json.data?.productVariant;
-  const inventoryItemId = variant?.inventoryItem?.id;
-  if (!variant?.id || !inventoryItemId) return null;
-
-  return {
-    productId: variant.product?.id,
-    variantId: variant.id,
-    inventoryItemId,
-    matchedProductTitle: variant.product?.title,
-    matchedVariantTitle: variant.title,
-    sku: variant.sku,
-    matchStrategy: "variant_id",
-  };
+  const body = await response.json();
+  if (
+    ("errors" in body && body.errors) ||
+    !body.data?.inventoryItemUpdate?.inventoryItem ||
+    body.data.inventoryItemUpdate.userErrors.length
+  )
+    throw new Error(
+      "Shopify did not confirm the cost update. Refresh the preview and verify the current cost before retrying.",
+    );
 }
-
-async function resolveBySku(
-  admin: Awaited<ReturnType<typeof authenticate.admin>>["admin"],
-  sku: string,
-): Promise<ResolvedInventoryItem | null> {
-  const json = await graphqlJson(
+export async function prepareCostSync(request: Request, invoiceId: string) {
+  const { session, admin, actor } = await requireAdmin(request);
+  await requireSubscription(request);
+  const invoice = await prisma.invoice.findFirst({
+    where: { id: invoiceId, shop: session.shop },
+    include: { items: true },
+  });
+  if (!invoice) throw new Error("Invoice not found.");
+  assertApproved(invoice);
+  if (
+    invoice.cogsSyncStatus === "SYNCED" &&
+    !(await prisma.costChange.count({
+      where: { invoiceId, shop: session.shop },
+    }))
+  )
+    throw new Error(
+      "This invoice was synced by an older version. Verify its costs directly in Shopify; repeating that sync is blocked.",
+    );
+  const currency = await fetchShopCurrency(admin);
+  assertCurrencyMatch(invoice.currency, currency);
+  const items = invoice.items.filter((i) => i.syncCost);
+  if (!items.length)
+    throw new Error("Select at least one product line for cost sync.");
+  if (items.some((i) => !i.matchConfirmed || !i.shopifyVariantId))
+    throw new Error(
+      "Confirm a Shopify variant for every line selected for cost sync.",
+    );
+  if (new Set(items.map((i) => i.shopifyVariantId)).size !== items.length)
+    throw new Error(
+      "Multiple lines target the same variant. Select one net unit cost per variant.",
+    );
+  const variants = await variantsByIds(
     admin,
-    `#graphql
-      query SmartBillVariantBySku($query: String!) {
-        productVariants(first: 1, query: $query) {
-          edges {
-            node {
-              id
-              title
-              sku
-              product {
-                id
-                title
-              }
-              inventoryItem {
-                id
-              }
-            }
-          }
-        }
-      }`,
-    { query: `sku:${sku}` },
+    items.map((i) => i.shopifyVariantId!),
   );
-  const variant = json.data?.productVariants?.edges?.[0]?.node;
-  const inventoryItemId = variant?.inventoryItem?.id;
-  if (!variant?.id || !inventoryItemId) return null;
-
-  return {
-    productId: variant.product?.id,
-    variantId: variant.id,
-    inventoryItemId,
-    matchedProductTitle: variant.product?.title,
-    matchedVariantTitle: variant.title,
-    sku: variant.sku,
-    matchStrategy: "sku",
-  };
-}
-
-async function resolveByProductId(
-  admin: Awaited<ReturnType<typeof authenticate.admin>>["admin"],
-  productId: string,
-): Promise<ResolvedInventoryItem | null> {
-  const json = await graphqlJson(
-    admin,
-    `#graphql
-      query SmartBillProductById($id: ID!) {
-        product(id: $id) {
-          id
-          title
-          variants(first: 1) {
-            edges {
-              node {
-                id
-                title
-                sku
-                inventoryItem {
-                  id
-                }
-              }
-            }
-          }
-        }
-      }`,
-    { id: productId },
-  );
-  const product = json.data?.product;
-  const variant = product?.variants?.edges?.[0]?.node;
-  const inventoryItemId = variant?.inventoryItem?.id;
-  if (!variant?.id || !inventoryItemId) return null;
-
-  return {
-    productId: product.id,
-    variantId: variant.id,
-    inventoryItemId,
-    matchedProductTitle: product.title,
-    matchedVariantTitle: variant.title,
-    sku: variant.sku,
-    matchStrategy: "product_id",
-  };
-}
-
-async function resolveByTitle(
-  admin: Awaited<ReturnType<typeof authenticate.admin>>["admin"],
-  name: string,
-): Promise<ResolvedInventoryItem | null> {
-  const json = await graphqlJson(
-    admin,
-    `#graphql
-      query SmartBillProductByTitle($query: String!) {
-        products(first: 1, query: $query) {
-          edges {
-            node {
-              id
-              title
-              variants(first: 1) {
-                edges {
-                  node {
-                    id
-                    title
-                    sku
-                    inventoryItem {
-                      id
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }`,
-    { query: `title:${name}*` },
-  );
-  const product = json.data?.products?.edges?.[0]?.node;
-  const variant = product?.variants?.edges?.[0]?.node;
-  const inventoryItemId = variant?.inventoryItem?.id;
-  if (!variant?.id || !inventoryItemId) return null;
-
-  return {
-    productId: product.id,
-    variantId: variant.id,
-    inventoryItemId,
-    matchedProductTitle: product.title,
-    matchedVariantTitle: variant.title,
-    sku: variant.sku,
-    matchStrategy: "title",
-  };
-}
-
-async function resolveInventoryItem(
-  admin: Awaited<ReturnType<typeof authenticate.admin>>["admin"],
-  item: SyncItem,
-) {
-  const explicitVariantId = item.shopifyVariantId?.startsWith("gid://")
-    ? item.shopifyVariantId
-    : null;
-  const sku = item.sku || (!explicitVariantId ? item.shopifyVariantId : null);
-
-  if (explicitVariantId) {
-    const resolved = await resolveByVariantId(admin, explicitVariantId);
-    if (resolved) return resolved;
-  }
-
-  if (sku) {
-    const resolved = await resolveBySku(admin, sku);
-    if (resolved) return resolved;
-  }
-
-  if (item.shopifyProductId) {
-    const resolved = await resolveByProductId(admin, item.shopifyProductId);
-    if (resolved) return resolved;
-  }
-
-  return resolveByTitle(admin, item.name);
-}
-
-async function updateInventoryItemCost(
-  admin: Awaited<ReturnType<typeof authenticate.admin>>["admin"],
-  inventoryItemId: string,
-  cost: number,
-) {
-  const json = await graphqlJson(
-    admin,
-    `#graphql
-      mutation SmartBillInventoryItemUpdate($id: ID!, $input: InventoryItemInput!) {
-        inventoryItemUpdate(id: $id, input: $input) {
-          inventoryItem {
-            id
-            unitCost {
-              amount
-            }
-          }
-          userErrors {
-            field
-            message
-          }
-        }
-      }`,
-    {
-      id: inventoryItemId,
-      input: { cost },
-    },
-  );
-
-  return json.data?.inventoryItemUpdate?.userErrors || [];
-}
-
-export async function syncCogsToShopify(request: Request, items: SyncItem[]) {
-  const { admin } = await authenticate.admin(request);
-  const syncedItems = [];
-  const errors = [];
-
-  for (const item of items) {
-    try {
-      const resolved = await resolveInventoryItem(admin, item);
-      if (!resolved) {
-        errors.push(
-          `Could not find Shopify inventory item for ${item.sku || item.name}`,
-        );
-        continue;
-      }
-
-      const userErrors = await updateInventoryItemCost(
-        admin,
-        resolved.inventoryItemId,
-        item.price,
+  await prisma.$transaction(async (tx) => {
+    const latest = await lockInvoice(tx, session.shop, invoiceId);
+    assertApproved(latest);
+    if (latest.revision !== invoice.revision)
+      throw new Error("Invoice changed; review it again.");
+    if (latest.costChanges.some((c) => c.status !== "PLANNED"))
+      throw new Error(
+        "Cost changes already exist. Check their status in the history.",
       );
-
-      if (userErrors.length > 0) {
-        errors.push(`Error updating ${item.name}: ${userErrors[0].message}`);
-      } else {
-        syncedItems.push({
-          invoiceItemId: item.invoiceItemId,
-          name: item.name,
-          sku: resolved.sku,
-          productId: resolved.productId,
-          variantId: resolved.variantId,
-          inventoryItemId: resolved.inventoryItemId,
-          matchedProductTitle: resolved.matchedProductTitle,
-          matchedVariantTitle: resolved.matchedVariantTitle,
-          matchStrategy: resolved.matchStrategy,
+    await tx.costChange.deleteMany({ where: { invoiceId, status: "PLANNED" } });
+    await tx.costChange.createMany({
+      data: items.map((item) => {
+        const variant = variants.find((v) => v.id === item.shopifyVariantId)!;
+        if (variant.inventoryItem.unitCost)
+          assertCurrencyMatch(
+            variant.inventoryItem.unitCost.currencyCode,
+            currency,
+          );
+        return {
+          shop: session.shop,
+          invoiceId,
+          invoiceItemId: item.id,
+          inventoryItemId: variant.inventoryItem.id,
+          variantId: variant.id,
+          previousCost: variant.inventoryItem.unitCost
+            ? Number(variant.inventoryItem.unitCost.amount)
+            : null,
           newCost: item.price,
-        });
-      }
-    } catch (err) {
-      console.error(`Error syncing COGS for ${item.name}:`, err);
-      errors.push(
-        `Failed to sync ${item.name}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
+          currency,
+          actor,
+          status: "PLANNED",
+        };
+      }),
+    });
+  });
+}
+export async function syncApprovedCosts(request: Request, invoiceId: string) {
+  const { session, admin, actor } = await requireAdmin(request);
+  await requireSubscription(request);
+  const currency = await fetchShopCurrency(admin);
+  const changes = await prisma.$transaction(async (tx) => {
+    const invoice = await lockInvoice(tx, session.shop, invoiceId);
+    assertApproved(invoice);
+    assertCurrencyMatch(invoice.currency, currency);
+    if (invoice.cogsSyncStatus === "SYNCING")
+      throw new Error(
+        "A cost sync is already running. Check the history before retrying.",
       );
+    const planned = invoice.costChanges.filter((c) => c.status === "PLANNED");
+    if (!planned.length) throw new Error("Preview the proposed costs first.");
+    await tx.invoice.update({
+      where: { id: invoiceId },
+      data: { cogsSyncStatus: "SYNCING" },
+    });
+    return planned;
+  });
+  let failures = 0;
+  for (const change of changes) {
+    try {
+      const [variant] = await variantsByIds(admin, [change.variantId]);
+      const current = variant.inventoryItem.unitCost
+        ? Number(variant.inventoryItem.unitCost.amount)
+        : null;
+      if (current !== change.previousCost)
+        throw new Error(
+          "The Shopify cost changed after preview. No overwrite was attempted.",
+        );
+      await prisma.costChange.update({
+        where: { id: change.id },
+        data: { status: "APPLYING" },
+      });
+      await writeCost(admin, change.inventoryItemId, change.newCost);
+      await prisma.costChange.update({
+        where: { id: change.id },
+        data: { status: "APPLIED", error: null },
+      });
+      await prisma.auditEvent.create({
+        data: {
+          shop: session.shop,
+          invoiceId,
+          actor,
+          action: "COST_UPDATED",
+          detail: {
+            variantId: change.variantId,
+            previousCost: change.previousCost,
+            newCost: change.newCost,
+            currency,
+          },
+        },
+      });
+    } catch (error) {
+      failures += 1;
+      await prisma.costChange.update({
+        where: { id: change.id },
+        data: {
+          status: "VERIFY",
+          error:
+            error instanceof Error
+              ? error.message
+              : "Verify the current Shopify cost.",
+        },
+      });
     }
   }
+  await prisma.invoice.update({
+    where: { id: invoiceId },
+    data: { cogsSyncStatus: failures ? "PARTIAL" : "SYNCED" },
+  });
+  if (failures)
+    throw new Error(
+      "Some costs need verification. Check each result in the cost history.",
+    );
+}
+export async function restoreCost(request: Request, changeId: string) {
+  const { session, admin, actor } = await requireAdmin(request);
+  await requireSubscription(request);
+  const change = await prisma.costChange.findFirst({
+    where: { id: changeId, shop: session.shop },
+  });
+  if (!change || change.status !== "APPLIED")
+    throw new Error("Only confirmed applied costs can be restored.");
+  if (change.previousCost == null)
+    throw new Error(
+      "This variant had no previous cost. Clear its cost manually in Shopify if needed.",
+    );
+  const [variant] = await variantsByIds(admin, [change.variantId]);
+  assertCurrencyMatch(change.currency, await fetchShopCurrency(admin));
+  if (Number(variant.inventoryItem.unitCost?.amount) !== change.newCost)
+    throw new Error(
+      "The cost has changed since this update. Restore was blocked to preserve the newer value.",
+    );
+  const claim = await prisma.costChange.updateMany({
+    where: { id: changeId, status: "APPLIED" },
+    data: { status: "RESTORING" },
+  });
+  if (!claim.count) throw new Error("Another request is restoring this cost.");
+  try {
+    await writeCost(admin, change.inventoryItemId, change.previousCost);
+    await prisma.$transaction([
+      prisma.costChange.update({
+        where: { id: changeId },
+        data: { status: "RESTORED" },
+      }),
+      prisma.invoice.update({
+        where: { id: change.invoiceId },
+        data: { cogsSyncStatus: "RESTORED" },
+      }),
+      prisma.auditEvent.create({
+        data: {
+          shop: session.shop,
+          invoiceId: change.invoiceId,
+          actor,
+          action: "COST_RESTORED",
+          detail: { changeId },
+        },
+      }),
+    ]);
+  } catch (error) {
+    await prisma.costChange.update({
+      where: { id: changeId },
+      data: {
+        status: "VERIFY_RESTORE",
+        error:
+          "Restore response was not confirmed. Verify the cost in Shopify.",
+      },
+    });
+    throw error;
+  }
+}
 
-  const failedCount = Math.max(0, items.length - syncedItems.length);
-
-  return {
-    success: items.length > 0 && syncedItems.length === items.length,
-    partialSuccess: syncedItems.length > 0 && failedCount > 0,
-    syncedCount: syncedItems.length,
-    failedCount,
-    syncedItems,
-    errors,
-  };
+export async function verifyCost(request: Request, changeId: string) {
+  const { session, admin, actor } = await requireAdmin(request);
+  await requireSubscription(request);
+  const change = await prisma.costChange.findFirst({
+    where: { id: changeId, shop: session.shop },
+  });
+  if (
+    !change ||
+    !["VERIFY", "VERIFY_RESTORE", "APPLYING", "RESTORING", "PLANNED"].includes(
+      change.status,
+    )
+  )
+    throw new Error("This cost does not need recovery.");
+  if (
+    ["APPLYING", "RESTORING", "PLANNED"].includes(change.status) &&
+    Date.now() - change.updatedAt.getTime() < 15 * 60 * 1000
+  )
+    throw new Error(
+      "Allow 15 minutes for an interrupted sync to finish before recovering it.",
+    );
+  assertCurrencyMatch(change.currency, await fetchShopCurrency(admin));
+  const [variant] = await variantsByIds(admin, [change.variantId]);
+  const current = variant.inventoryItem.unitCost
+    ? Number(variant.inventoryItem.unitCost.amount)
+    : null;
+  const restoring = ["VERIFY_RESTORE", "RESTORING"].includes(change.status);
+  const status =
+    current === change.newCost
+      ? "APPLIED"
+      : current === change.previousCost
+        ? restoring
+          ? "RESTORED"
+          : "PLANNED"
+        : null;
+  if (!status)
+    throw new Error(
+      "Shopify now has a different cost. Review that value directly in Shopify; automatic recovery cannot overwrite it.",
+    );
+  await prisma.$transaction(async (tx) => {
+    await lockInvoice(tx, session.shop, change.invoiceId);
+    const updated = await tx.costChange.updateMany({
+      where: {
+        id: changeId,
+        status: change.status,
+        updatedAt: change.updatedAt,
+      },
+      data: { status, error: null },
+    });
+    if (!updated.count)
+      throw new Error("Cost history changed. Reload it before recovery.");
+    const changes = await tx.costChange.findMany({
+      where: { invoiceId: change.invoiceId },
+    });
+    await tx.invoice.update({
+      where: { id: change.invoiceId },
+      data: {
+        cogsSyncStatus: changes.every((c) => c.status === "APPLIED")
+          ? "SYNCED"
+          : changes.every((c) => c.status === "RESTORED")
+            ? "RESTORED"
+            : "PARTIAL",
+      },
+    });
+    await tx.auditEvent.create({
+      data: {
+        shop: session.shop,
+        invoiceId: change.invoiceId,
+        actor,
+        action: "COST_VERIFIED",
+        detail: { changeId, current, status },
+      },
+    });
+  });
 }

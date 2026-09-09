@@ -71,9 +71,13 @@ async function quickBooksQuery<T>(
   responseKey: string,
 ) {
   const path = `/query?query=${encodeURIComponent(query)}`;
-  const response = await quickBooksRequest<Record<string, any>>(connection, path, {
-    method: "GET",
-  });
+  const response = await quickBooksRequest<Record<string, any>>(
+    connection,
+    path,
+    {
+      method: "GET",
+    },
+  );
 
   return (response.QueryResponse?.[responseKey] || []) as T[];
 }
@@ -95,13 +99,17 @@ async function createQuickBooksVendor(
   connection: QuickBooksConnection,
   displayName: string,
 ) {
-  const response = await quickBooksRequest<{ Vendor: any }>(connection, "/vendor", {
-    method: "POST",
-    body: JSON.stringify({
-      DisplayName: displayName,
-      CompanyName: displayName,
-    }),
-  });
+  const response = await quickBooksRequest<{ Vendor: any }>(
+    connection,
+    "/vendor",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        DisplayName: displayName,
+        CompanyName: displayName,
+      }),
+    },
+  );
 
   return response.Vendor;
 }
@@ -176,7 +184,10 @@ export async function resolveQuickBooksExpenseAccountRef(
   }
 
   if (configuredName) {
-    const account = await findQuickBooksAccountByName(connection, configuredName);
+    const account = await findQuickBooksAccountByName(
+      connection,
+      configuredName,
+    );
     const ref = quickBooksRefFromAccount(account);
     if (ref) return ref;
 
@@ -185,7 +196,9 @@ export async function resolveQuickBooksExpenseAccountRef(
     );
   }
 
-  const account = chooseDefaultExpenseAccount(await listQuickBooksAccounts(connection));
+  const account = chooseDefaultExpenseAccount(
+    await listQuickBooksAccounts(connection),
+  );
   const ref = quickBooksRefFromAccount(account);
   if (ref) return ref;
 
@@ -197,11 +210,26 @@ export async function resolveQuickBooksExpenseAccountRef(
 export async function createQuickBooksBill(
   connection: QuickBooksConnection,
   payload: Record<string, unknown>,
+  requestKey?: string,
 ) {
-  return quickBooksRequest(connection, "/bill", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+  return quickBooksRequest(
+    connection,
+    requestKey ? `/bill?requestid=${encodeURIComponent(requestKey)}` : "/bill",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function readQuickBooksBill(
+  connection: QuickBooksConnection,
+  id: string,
+) {
+  return quickBooksRequest<{ Bill: any }>(
+    connection,
+    `/bill/${encodeURIComponent(id)}`,
+  );
 }
 
 export async function getQuickBooksAuthUrl(
@@ -222,19 +250,22 @@ export async function getQuickBooksToken(code: string, redirectUri: string) {
     `${requiredEnv("QB_CLIENT_ID")}:${requiredEnv("QB_CLIENT_SECRET")}`,
   ).toString("base64");
 
-  const response = await fetch("https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer", {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${credentials}`,
-      Accept: "application/json",
-      "Content-Type": "application/x-www-form-urlencoded",
+  const response = await fetch(
+    "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${credentials}`,
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: redirectUri,
+      }),
     },
-    body: new URLSearchParams({
-      grant_type: "authorization_code",
-      code,
-      redirect_uri: redirectUri,
-    }),
-  });
+  );
 
   if (!response.ok) {
     throw new Error(`QuickBooks token exchange failed: ${response.status}`);
@@ -248,18 +279,21 @@ export async function refreshQuickBooksToken(refreshToken: string) {
     `${requiredEnv("QB_CLIENT_ID")}:${requiredEnv("QB_CLIENT_SECRET")}`,
   ).toString("base64");
 
-  const response = await fetch("https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer", {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${credentials}`,
-      Accept: "application/json",
-      "Content-Type": "application/x-www-form-urlencoded",
+  const response = await fetch(
+    "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${credentials}`,
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+      }),
     },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-    }),
-  });
+  );
 
   if (!response.ok) {
     throw new Error(`QuickBooks token refresh failed: ${response.status}`);

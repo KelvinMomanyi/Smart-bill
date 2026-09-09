@@ -139,6 +139,7 @@ model InvoiceItem {
   confidence          Float?
   matchedProductTitle String?
   matchConfirmed      Boolean @default(false)
+  syncCost            Boolean @default(true)
 }
 
 model ShopSettings {
@@ -261,6 +262,7 @@ model InvoiceJob {
   availableAt     DateTime @default(now())
   lockedAt        DateTime?
   leaseToken      String?
+  usageMonth      String
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   @@unique([shop, documentHash])

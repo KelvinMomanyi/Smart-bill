@@ -7,6 +7,7 @@ import {
   type Canvas,
 } from "@napi-rs/canvas";
 import Tesseract from "tesseract.js";
+import { MAX_PDF_PAGES } from "./plans";
 
 type PdfPageProxy = {
   getViewport: (params: { scale: number }) => { width: number; height: number };
@@ -47,12 +48,13 @@ type ExtractTextOptions = {
   filename?: string;
   mimeType?: string;
   maxPdfPages?: number;
+  onProgress?: (page: number, total: number) => Promise<void>;
 };
 
 const PDF_RENDER_DPI = 300;
 const MIN_OCR_WIDTH = 1800;
 const MAX_OCR_EDGE = 3600;
-const DEFAULT_MAX_PDF_PAGES = Number.MAX_SAFE_INTEGER;
+const DEFAULT_MAX_PDF_PAGES = MAX_PDF_PAGES;
 const MIN_MEANINGFUL_TEXT_LENGTH = 24;
 const INVOICE_FIELD_PATTERNS = [
   /\binvoice\b/i,
@@ -107,11 +109,12 @@ function clamp(value: number, min = 0, max = 255) {
 }
 
 function getMaxPdfPages(value?: number) {
-  if (value && Number.isFinite(value) && value > 0) return Math.floor(value);
+  if (value && Number.isFinite(value) && value > 0)
+    return Math.min(MAX_PDF_PAGES, Math.floor(value));
 
   const configured = Number.parseInt(process.env.OCR_MAX_PDF_PAGES || "", 10);
   return Number.isFinite(configured) && configured > 0
-    ? configured
+    ? Math.min(MAX_PDF_PAGES, configured)
     : DEFAULT_MAX_PDF_PAGES;
 }
 
@@ -420,6 +423,12 @@ async function extractTextFromPdf(
     useSystemFonts: true,
   });
   const pdf = (await loadingTask.promise) as unknown as PdfDocumentProxy;
+  if (pdf.numPages > getMaxPdfPages(options.maxPdfPages)) {
+    await pdf.destroy();
+    throw new Error(
+      `PDF exceeds the ${getMaxPdfPages(options.maxPdfPages)}-page limit. Split it into complete invoice documents before uploading.`,
+    );
+  }
   const pageLimit = Math.min(pdf.numPages, getMaxPdfPages(options.maxPdfPages));
   const pages: OcrPageResult[] = [];
   const worker = await createOcrWorker();
@@ -444,6 +453,7 @@ async function extractTextFromPdf(
         source: selected.source,
         text: selected.text,
       });
+      await options.onProgress?.(pageNumber, pdf.numPages);
     }
   } finally {
     await Promise.allSettled([worker.terminate(), pdf.destroy()]);

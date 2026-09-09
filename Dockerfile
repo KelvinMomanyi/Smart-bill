@@ -1,5 +1,5 @@
-FROM node:18-alpine
-RUN apk add --no-cache openssl
+FROM node:22-bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates && rm -rf /var/lib/apt/lists/*
 
 EXPOSE 3000
 
@@ -9,13 +9,12 @@ ENV NODE_ENV=production
 
 COPY package.json package-lock.json* ./
 
-RUN npm ci --omit=dev && npm cache clean --force
-# Remove CLI packages since we don't need them in production by default.
-# Remove this line if you want to run CLI commands in your container.
-RUN npm remove @shopify/cli
+COPY prisma ./prisma
+RUN npm ci --include=dev && npm cache clean --force
 
 COPY . .
 
 RUN npm run build
 
-CMD ["npm", "run", "docker-start"]
+# Apply migrations once as a release step. Run a second service with npm run worker.
+CMD ["npm", "run", "start"]

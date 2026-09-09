@@ -9,7 +9,9 @@ type AccountingOAuthState = {
 };
 
 function stateSecret() {
-  return process.env.SHOPIFY_API_SECRET || "smartbill-local-oauth-state";
+  const secret = process.env.SHOPIFY_API_SECRET;
+  if (!secret) throw new Error("Accounting authorization is not configured.");
+  return secret;
 }
 
 function signatureFor(payload: AccountingOAuthState) {
@@ -55,12 +57,19 @@ export function readAccountingState(value?: string | null) {
 
   const payload = parsed.payload;
 
-  if (!payload.shop || !payload.platform) {
+  if (
+    !/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(payload.shop) ||
+    !["XERO", "QUICKBOOKS"].includes(payload.platform)
+  ) {
     throw new Error("Invalid accounting OAuth state");
   }
 
   const stateAgeMs = Date.now() - payload.issuedAt;
-  if (!Number.isFinite(stateAgeMs) || stateAgeMs > 30 * 60 * 1000) {
+  if (
+    !Number.isFinite(stateAgeMs) ||
+    stateAgeMs < -60000 ||
+    stateAgeMs > 30 * 60 * 1000
+  ) {
     throw new Error("Expired accounting OAuth state");
   }
 

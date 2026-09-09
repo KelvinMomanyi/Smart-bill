@@ -1,406 +1,352 @@
 import {
   json,
-  type ActionFunctionArgs,
   type LoaderFunctionArgs,
+  type ActionFunctionArgs,
 } from "@remix-run/node";
 import {
   Form,
+  Link,
   useActionData,
   useLoaderData,
   useNavigation,
+  useRevalidator,
 } from "@remix-run/react";
+import { useEffect, useState } from "react";
 import {
-  Badge,
-  Banner,
-  BlockStack,
-  Box,
-  Button,
-  Card,
-  Checkbox,
-  DataTable,
-  InlineStack,
-  Layout,
   Page,
-  Select,
+  Card,
+  BlockStack,
+  Banner,
+  Button,
   Text,
-  TextField,
+  InlineStack,
+  DataTable,
 } from "@shopify/polaris";
-import { useState } from "react";
 import prisma from "../db.server";
-import { authenticate, SMARTBILL_PLANS } from "../shopify.server";
+import { authenticate } from "../shopify.server";
 import {
-  createInvoiceFromInput,
   getDashboard,
-  getShopSettings,
+  createInvoiceFromInput,
 } from "../services/invoiceWorkflow.server";
+import {
+  getUsage,
+  subscriptionFor,
+  requireSubscription,
+} from "../services/billing.server";
+import { enqueueDocument } from "../services/invoiceJobs.server";
+import { PLANS } from "../utils/plans";
 import { formatMoney } from "../utils/format";
-
-export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { billing, session } = await authenticate.admin(request);
-  const shop = session.shop;
-  const [settings, dashboard, purchaseOrders] = await Promise.all([
-    getShopSettings(shop),
-    getDashboard(shop),
-    prisma.purchaseOrder.findMany({
-      where: { shop, status: { in: ["OPEN", "PARTIAL", "MISMATCH"] } },
-      include: { vendor: true, items: true },
-      orderBy: { updatedAt: "desc" },
-      take: 25,
-    }),
-  ]);
-
-  const billingStatus = await billing
-    .check({
-      plans: Object.values(SMARTBILL_PLANS),
-      isTest: process.env.NODE_ENV !== "production",
-    })
-    .then((result) => ({ active: result.hasActivePayment }))
-    .catch(() => ({ active: false }));
-
-  return json({ settings, dashboard, purchaseOrders, billingStatus });
-};
-
-export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const formData = await request.formData();
-  const intent = formData.get("intent");
-
-  if (intent !== "upload-invoice") {
-    return json({ success: false, error: "Unknown action" }, { status: 400 });
-  }
-
+export async function loader({ request }: LoaderFunctionArgs) {
+  const { session, admin } = await authenticate.admin(request);
+  const [dashboard, subscription, used, purchaseOrders, jobs, pendingJobs] =
+    await Promise.all([
+      getDashboard(session.shop),
+      subscriptionFor(admin),
+      getUsage(session.shop),
+      prisma.purchaseOrder.findMany({
+        where: { shop: session.shop, status: { not: "FULFILLED" } },
+        include: { vendor: true },
+        take: 100,
+      }),
+      prisma.invoiceJob.findMany({
+        where: { shop: session.shop },
+        orderBy: { createdAt: "desc" },
+        take: 10,
+        select: {
+          id: true,
+          filename: true,
+          status: true,
+          pageCount: true,
+          error: true,
+          invoiceId: true,
+        },
+      }),
+      prisma.invoiceJob.count({
+        where: { shop: session.shop, status: { in: ["QUEUED", "PROCESSING"] } },
+      }),
+    ]);
+  return json({
+    dashboard,
+    subscription,
+    used,
+    purchaseOrders,
+    jobs,
+    pendingJobs,
+    uploadLimitMb: process.env.VERCEL ? 4 : 25,
+  });
+}
+export async function action({ request }: ActionFunctionArgs) {
   try {
-    const file = formData.get("invoiceFile");
+    const limitMb = process.env.VERCEL ? 4 : 25;
+    if (
+      Number(request.headers.get("content-length") || 0) >
+      limitMb * 1024 * 1024 + 65536
+    )
+      throw new Error(`Upload at most ${limitMb} MB in a batch on this host.`);
+    const { session, plan } = await requireSubscription(request);
+    const form = await request.formData();
+    const files = form
+      .getAll("invoiceFile")
+      .filter((f): f is File => f instanceof File && f.size > 0);
+    if (files.reduce((sum, file) => sum + file.size, 0) > limitMb * 1024 * 1024)
+      throw new Error(`Upload at most ${limitMb} MB in a batch on this host.`);
+    const vendorName = String(form.get("vendorName") || "");
+    const purchaseOrderId =
+      String(form.get("purchaseOrderId") || "") || undefined;
+    if (files.length > 10)
+      throw new Error("Upload at most 10 documents at once.");
+    if (files.length > 1) await requireSubscription(request, "bulk");
+    if (files.length) {
+      const messages: string[] = [];
+      let accepted = 0;
+      for (const file of files) {
+        try {
+          await enqueueDocument({
+            shop: session.shop,
+            plan,
+            buffer: Buffer.from(await file.arrayBuffer()),
+            filename: file.name,
+            contentType: file.type,
+            vendorName,
+            purchaseOrderId,
+          });
+          messages.push(`${file.name}: queued`);
+          accepted++;
+        } catch (error) {
+          messages.push(
+            `${file.name}: ${error instanceof Error ? error.message : "Upload failed"}`,
+          );
+        }
+      }
+      if (!accepted) throw new Error(messages.join(" • "));
+      return json({ success: true as const, message: messages.join(" • ") });
+    }
     const result = await createInvoiceFromInput({
       request,
       shop: session.shop,
-      file: file instanceof File ? file : null,
-      rawText: String(formData.get("rawText") || ""),
-      vendorName: String(formData.get("vendorName") || ""),
-      purchaseOrderId: String(formData.get("purchaseOrderId") || "") || null,
-      syncCogs: formData.get("syncCogs") === "on",
+      rawText: String(form.get("rawText") || ""),
+      vendorName,
+      purchaseOrderId,
     });
-
     return json({
-      success: true,
-      invoiceId: result.invoice.id,
-      invoiceNumber: result.invoice.invoiceNumber,
-      warnings: result.warnings,
+      success: true as const,
+      message: `Invoice ${result.invoice.invoiceNumber || result.invoice.id} saved for review.`,
     });
   } catch (error) {
+    if (error instanceof Response) throw error;
     return json(
       {
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
+        success: false as const,
+        error: error instanceof Error ? error.message : "Capture failed.",
       },
       { status: 400 },
     );
   }
-};
-
-function statusTone(status: string) {
-  if (
-    status === "NEEDS_ATTENTION" ||
-    status === "MISMATCH" ||
-    status === "FAILED"
-  )
-    return "critical";
-  if (status === "APPROVED" || status === "SYNCED" || status === "FULFILLED")
-    return "success";
-  if (status === "PARTIAL" || status === "PENDING") return "warning";
-  return "info";
 }
-
-function MetricCard({
-  label,
-  value,
-  detail,
-}: {
-  label: string;
-  value: string;
-  detail: string;
-}) {
-  return (
-    <Card>
-      <BlockStack gap="200">
-        <Text as="p" tone="subdued">
-          {label}
-        </Text>
-        <Text as="p" variant="headingLg">
-          {value}
-        </Text>
-        <Text as="p" tone="subdued">
-          {detail}
-        </Text>
-      </BlockStack>
-    </Card>
-  );
-}
-
 export default function Dashboard() {
-  const { settings, dashboard, purchaseOrders, billingStatus } =
-    useLoaderData<typeof loader>();
-  const actionData = useActionData<typeof action>();
-  const navigation = useNavigation();
-  const [vendorName, setVendorName] = useState("");
-  const [rawText, setRawText] = useState("");
-  const [purchaseOrderId, setPurchaseOrderId] = useState("");
-  const [syncCogs, setSyncCogs] = useState(settings.autoSyncCogs);
-  const isUploading = navigation.state === "submitting";
-
-  const poOptions = [
-    { label: "No purchase order", value: "" },
-    ...purchaseOrders.map((po) => ({
-      label: `${po.poNumber || `PO-${po.id.slice(0, 8)}`} - ${po.vendor.name} (${po.status})`,
-      value: po.id,
-    })),
-  ];
-
-  const invoiceRows = dashboard.recentInvoices.map((invoice) => [
-    invoice.invoiceNumber || invoice.id.slice(0, 8),
-    invoice.vendor?.name || "Unknown vendor",
-    formatMoney(invoice.total, invoice.currency),
-    invoice.purchaseOrder?.poNumber || "Unlinked",
-    invoice.reviewStatus,
-    new Date(invoice.createdAt).toLocaleDateString(),
-  ]);
-
-  const poRows = dashboard.activePurchaseOrders.map((po) => [
-    po.poNumber || po.id.slice(0, 8),
-    po.vendor.name,
-    po.status,
-    po.items.length.toString(),
-    formatMoney(po.totalAmount || 0),
-  ]);
-
+  const {
+    dashboard,
+    subscription,
+    used,
+    purchaseOrders,
+    jobs,
+    pendingJobs,
+    uploadLimitMb,
+  } = useLoaderData<typeof loader>();
+  const [uploadError, setUploadError] = useState("");
+  const result = useActionData<typeof action>();
+  const busy = useNavigation().state !== "idle";
+  const revalidator = useRevalidator();
+  useEffect(() => {
+    if (!pendingJobs) return;
+    const timer = setInterval(() => {
+      if (revalidator.state === "idle") revalidator.revalidate();
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [pendingJobs, revalidator]);
   return (
     <Page
-      title="SmartBill command center"
-      subtitle="Capture supplier invoices, match purchase orders, update Shopify COGS, and prepare accounting exports."
+      title="SmartBill"
+      subtitle="Capture invoices, review costs, and approve accurate supplier bills."
       primaryAction={{ content: "Review invoices", url: "/app/invoices" }}
-      secondaryActions={[{ content: "Create PO", url: "/app/reconciliation" }]}
     >
       <BlockStack gap="500">
-        {!billingStatus.active && (
-          <Banner
-            tone="warning"
-            title="No active SmartBill subscription detected"
-          >
+        {!subscription && (
+          <Banner tone="info" title="Start your 14-day trial">
             <p>
-              Start a billing plan in Settings before launching this app
-              publicly.
+              Plans start at $19 USD every 30 days. Choose a plan in Settings to
+              start capturing invoices.
             </p>
+            <Button url="/app/settings">Choose a plan</Button>
           </Banner>
         )}
-
-        {actionData?.success && (
-          <Banner
-            tone={actionData.warnings.length > 0 ? "warning" : "success"}
-            title="Invoice captured"
+        {result && (
+          <Banner tone={result.success ? "info" : "critical"}>
+            {result.success ? result.message : result.error}
+          </Banner>
+        )}
+        {uploadError && <Banner tone="critical">{uploadError}</Banner>}
+        <Card>
+          <InlineStack gap="500">
+            <Text as="p">
+              Invoices this month: {dashboard.metrics.invoicesThisMonth}
+            </Text>
+            <Text as="p">
+              Need attention: {dashboard.metrics.invoicesNeedingAttention}
+            </Text>
+            <Text as="p">Open POs: {dashboard.metrics.openPurchaseOrders}</Text>
+            <Text as="p">
+              Costs synced: {dashboard.metrics.cogsSyncedThisMonth}
+            </Text>
+          </InlineStack>
+          <Text as="p">
+            Spend:{" "}
+            {dashboard.metrics.spendByCurrency
+              .map((t) => formatMoney(t.total, t.currency))
+              .join(" · ") || "No invoices yet"}
+          </Text>
+          {subscription && (
+            <Text as="p">
+              {used} / {PLANS[subscription.plan].invoiceLimit} uploads used this
+              calendar month
+            </Text>
+          )}
+        </Card>
+        <Card>
+          <Form
+            method="post"
+            encType="multipart/form-data"
+            onSubmit={(event) => {
+              const form = new FormData(event.currentTarget);
+              const files = form
+                .getAll("invoiceFile")
+                .filter((file): file is File => file instanceof File);
+              setUploadError("");
+              if (
+                files.some((file) => file.size > 10 * 1024 * 1024) ||
+                files.reduce((sum, file) => sum + file.size, 0) >
+                  uploadLimitMb * 1024 * 1024
+              ) {
+                event.preventDefault();
+                setUploadError(
+                  `Use files up to 10 MB each and at most ${uploadLimitMb} MB in total per batch on this host.`,
+                );
+              }
+            }}
           >
-            <p>
-              Invoice {actionData.invoiceNumber || actionData.invoiceId} was
-              saved.
-              {actionData.warnings.length > 0
-                ? ` Review warnings: ${actionData.warnings.join("; ")}`
-                : ""}
-            </p>
-          </Banner>
+            <BlockStack gap="300">
+              <Text as="h2" variant="headingMd">
+                Capture supplier invoices
+              </Text>
+              <label>
+                Invoice documents{" "}
+                <input
+                  name="invoiceFile"
+                  type="file"
+                  accept=".pdf,image/jpeg,image/png,image/gif,image/webp"
+                  multiple={subscription?.plan === "GROWTH"}
+                />
+              </label>
+              <Text as="p" tone="subdued">
+                PDFs and images, up to 10 MB and 10 pages each. Growth supports
+                batches of up to 10 documents. Processing continues in the
+                background.
+              </Text>
+              <Text as="p" tone="subdued">
+                This host accepts up to {uploadLimitMb} MB total per upload
+                batch.
+              </Text>
+              <label>
+                Supplier name (optional) <input name="vendorName" />
+              </label>
+              <label>
+                Purchase order{" "}
+                <select name="purchaseOrderId">
+                  <option value="">No purchase order</option>
+                  {purchaseOrders.map((po) => (
+                    <option key={po.id} value={po.id}>
+                      {po.poNumber || po.id.slice(0, 8)} — {po.vendor.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Or paste invoice text{" "}
+                <textarea name="rawText" rows={6} style={{ width: "100%" }} />
+              </label>
+              <Text as="p" tone="subdued">
+                Every invoice is saved for review. No product costs or
+                accounting bills change during capture.
+              </Text>
+              <Button
+                submit
+                variant="primary"
+                loading={busy}
+                disabled={!subscription}
+              >
+                Capture invoices
+              </Button>
+            </BlockStack>
+          </Form>
+        </Card>
+        {jobs.length > 0 && (
+          <Card>
+            <BlockStack gap="300">
+              <Text as="h2" variant="headingMd">
+                Document processing
+              </Text>
+              {jobs.map((job) => (
+                <div key={job.id}>
+                  <Text as="p">
+                    {job.filename} — {job.status}
+                    {job.pageCount > 0
+                      ? ` (${job.pageCount} pages processed)`
+                      : ""}
+                  </Text>
+                  {job.error && (
+                    <Text as="p" tone="critical">
+                      {job.error}
+                    </Text>
+                  )}
+                  {job.invoiceId && (
+                    <Link to={`/app/invoices/${job.invoiceId}`}>
+                      Review invoice
+                    </Link>
+                  )}
+                  {job.status === "FAILED" && (
+                    <Form method="post" action="/api/jobs">
+                      <input type="hidden" name="jobId" value={job.id} />
+                      <Button submit>Retry processing</Button>
+                    </Form>
+                  )}
+                </div>
+              ))}
+            </BlockStack>
+          </Card>
         )}
-        {actionData && !actionData.success && (
-          <Banner tone="critical" title="Invoice capture failed">
-            <p>{actionData.error}</p>
-          </Banner>
-        )}
-
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
-            gap: "16px",
-          }}
-        >
-          <MetricCard
-            label="Invoices this month"
-            value={dashboard.metrics.invoicesThisMonth.toString()}
-            detail={formatMoney(dashboard.metrics.spendThisMonth)}
-          />
-          <MetricCard
-            label="Needs attention"
-            value={dashboard.metrics.invoicesNeedingAttention.toString()}
-            detail="Extraction or PO mismatch"
-          />
-          <MetricCard
-            label="Open POs"
-            value={dashboard.metrics.openPurchaseOrders.toString()}
-            detail="Open, partial, or mismatch"
-          />
-          <MetricCard
-            label="COGS synced"
-            value={dashboard.metrics.cogsSyncedThisMonth.toString()}
-            detail="This month"
-          />
-        </div>
-
-        <Layout>
-          <Layout.Section>
-            <Card>
-              <Form method="post" encType="multipart/form-data">
-                <input type="hidden" name="intent" value="upload-invoice" />
-                <BlockStack gap="400">
-                  <Text as="h2" variant="headingMd">
-                    Capture supplier invoice
-                  </Text>
-                  <Text as="p" tone="subdued">
-                    Upload a clear invoice image or PDF. SmartBill will extract
-                    items, link a PO, and optionally sync unit costs.
-                  </Text>
-                  <input
-                    name="invoiceFile"
-                    type="file"
-                    accept="image/*,.pdf,application/pdf"
-                  />
-                  <TextField
-                    label="Vendor override"
-                    name="vendorName"
-                    value={vendorName}
-                    onChange={setVendorName}
-                    autoComplete="off"
-                    helpText="Optional. Leave blank to use the supplier detected from the invoice."
-                  />
-                  <Select
-                    label="Purchase order"
-                    name="purchaseOrderId"
-                    options={poOptions}
-                    value={purchaseOrderId}
-                    onChange={setPurchaseOrderId}
-                  />
-                  <TextField
-                    label="OCR text"
-                    name="rawText"
-                    value={rawText}
-                    onChange={setRawText}
-                    autoComplete="off"
-                    multiline={6}
-                    helpText="Optional override or fallback text for images, PDFs, and email invoices."
-                  />
-                  <Checkbox
-                    label="Sync extracted line item unit costs to Shopify COGS"
-                    name="syncCogs"
-                    checked={syncCogs}
-                    onChange={setSyncCogs}
-                  />
-                  <InlineStack gap="300">
-                    <Button submit variant="primary" loading={isUploading}>
-                      Capture invoice
-                    </Button>
-                    <Button url="/app/reconciliation">
-                      Manage purchase orders
-                    </Button>
-                  </InlineStack>
-                </BlockStack>
-              </Form>
-            </Card>
-          </Layout.Section>
-
-          <Layout.Section variant="oneThird">
-            <Card>
-              <BlockStack gap="300">
-                <Text as="h2" variant="headingMd">
-                  Operational posture
-                </Text>
-                <InlineStack gap="200">
-                  <Badge
-                    tone={statusTone(
-                      settings.requireReview ? "PENDING" : "SYNCED",
-                    )}
-                  >
-                    {settings.requireReview
-                      ? "Review required"
-                      : "Auto approval"}
-                  </Badge>
-                  <Badge
-                    tone={settings.accountingConnected ? "success" : "warning"}
-                  >
-                    {settings.accountingConnected
-                      ? "Accounting connected"
-                      : "Accounting export pending"}
-                  </Badge>
-                </InlineStack>
-                <Box paddingBlockStart="200">
-                  <Text as="p" tone="subdued">
-                    Private document storage, PO matching, vendor analytics,
-                    COGS sync, and billing are now first-class workflows.
-                  </Text>
-                </Box>
-                <Button url="/app/settings">Configure settings</Button>
-              </BlockStack>
-            </Card>
-          </Layout.Section>
-        </Layout>
-
-        <Layout>
-          <Layout.Section>
-            <Card>
-              <BlockStack gap="300">
-                <Text as="h2" variant="headingMd">
-                  Recent invoices
-                </Text>
-                {invoiceRows.length > 0 ? (
-                  <DataTable
-                    columnContentTypes={[
-                      "text",
-                      "text",
-                      "numeric",
-                      "text",
-                      "text",
-                      "text",
-                    ]}
-                    headings={[
-                      "Invoice",
-                      "Vendor",
-                      "Total",
-                      "PO",
-                      "Review",
-                      "Captured",
-                    ]}
-                    rows={invoiceRows}
-                  />
-                ) : (
-                  <Text as="p" tone="subdued">
-                    No invoices captured yet.
-                  </Text>
-                )}
-              </BlockStack>
-            </Card>
-          </Layout.Section>
-          <Layout.Section variant="oneThird">
-            <Card>
-              <BlockStack gap="300">
-                <Text as="h2" variant="headingMd">
-                  Active POs
-                </Text>
-                {poRows.length > 0 ? (
-                  <DataTable
-                    columnContentTypes={[
-                      "text",
-                      "text",
-                      "text",
-                      "numeric",
-                      "numeric",
-                    ]}
-                    headings={["PO", "Vendor", "Status", "Items", "Expected"]}
-                    rows={poRows}
-                  />
-                ) : (
-                  <Text as="p" tone="subdued">
-                    Create purchase orders to unlock 2-way invoice matching.
-                  </Text>
-                )}
-              </BlockStack>
-            </Card>
-          </Layout.Section>
-        </Layout>
+        <Card>
+          <BlockStack gap="300">
+            <Text as="h2" variant="headingMd">
+              Recent invoices
+            </Text>
+            <DataTable
+              columnContentTypes={["text", "text", "numeric", "text"]}
+              headings={["Invoice", "Supplier", "Total", "Review"]}
+              rows={dashboard.recentInvoices.map((i) => [
+                <Link key={i.id} to={`/app/invoices/${i.id}`}>
+                  {i.invoiceNumber || i.id.slice(0, 8)}
+                </Link>,
+                i.vendor?.name || "Unknown",
+                formatMoney(i.total, i.currency),
+                i.reviewStatus,
+              ])}
+            />
+            <InlineStack gap="300">
+              <Button url="/app/reconciliation">Purchase orders</Button>
+              <Button url="/app/reports">Weekly report</Button>
+            </InlineStack>
+          </BlockStack>
+        </Card>
       </BlockStack>
     </Page>
   );

@@ -1,295 +1,439 @@
+import { randomUUID } from "node:crypto";
 import {
   json,
   redirect,
-  type ActionFunctionArgs,
   type LoaderFunctionArgs,
+  type ActionFunctionArgs,
 } from "@remix-run/node";
-import { Form, useActionData, useLoaderData, useNavigation } from "@remix-run/react";
 import {
-  Badge,
-  Banner,
-  BlockStack,
-  Button,
-  Card,
-  Checkbox,
-  InlineStack,
-  Layout,
+  Form,
+  useActionData,
+  useLoaderData,
+  useNavigation,
+} from "@remix-run/react";
+import {
   Page,
-  Select,
+  Card,
+  BlockStack,
+  Banner,
   Text,
-  TextField,
+  Button,
+  InlineStack,
+  Badge,
 } from "@shopify/polaris";
-import { useState } from "react";
 import prisma from "../db.server";
-import { authenticate, SMARTBILL_PLANS } from "../shopify.server";
-import { getShopSettings } from "../services/invoiceWorkflow.server";
-import { createAccountingState } from "../utils/accountingOAuth.server";
-import { getQuickBooksAuthUrl } from "../utils/quickbook";
 import { requireAdmin } from "../utils/rbac.server";
+import { getShopSettings } from "../services/invoiceWorkflow.server";
+import {
+  getUsage,
+  requireSubscription,
+  subscriptionFor,
+} from "../services/billing.server";
+import { PLANS, planFromName, TRIAL_DAYS } from "../utils/plans";
+import { validCurrency } from "../utils/invoiceRules";
+import { createAccountingState } from "../utils/accountingOAuth.server";
 import { getXeroAuthUrl } from "../utils/xero";
-
-export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await requireAdmin(request);
-  const [settings, accountingConnections] = await Promise.all([
+import { getQuickBooksAuthUrl } from "../utils/quickbook";
+export async function loader({ request }: LoaderFunctionArgs) {
+  const { session, admin } = await requireAdmin(request);
+  const [settings, subscription, used, connections, staff] = await Promise.all([
     getShopSettings(session.shop),
+    subscriptionFor(admin),
+    getUsage(session.shop),
     prisma.accountingConnection.findMany({
       where: { shop: session.shop },
-      select: { platform: true, tenantId: true, realmId: true, updatedAt: true },
+      select: { platform: true },
+    }),
+    prisma.session.findMany({
+      where: { shop: session.shop, isOnline: true },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        role: true,
+        accountOwner: true,
+      },
     }),
   ]);
-
   return json({
     settings,
-    accountingConnections,
-    plans: [
-      { label: "Growth - $99/mo", value: SMARTBILL_PLANS.GROWTH },
-      { label: "Scale - $249/mo", value: SMARTBILL_PLANS.SCALE },
-    ],
+    subscription,
+    used,
+    connections,
+    staff,
+    owner: session.onlineAccessInfo?.associated_user.account_owner === true,
+    inboxDomain: process.env.INBOUND_EMAIL_DOMAIN || "",
+    inboxReady: Boolean(
+      process.env.INBOUND_EMAIL_DOMAIN && process.env.INBOUND_EMAIL_SECRET,
+    ),
   });
-};
-
-export const action = async ({ request }: ActionFunctionArgs) => {
-  const { billing, session } = await authenticate.admin(request);
-  const formData = await request.formData();
-  const intent = String(formData.get("intent") || "");
-  const shop = session.shop;
-
+}
+export async function action({ request }: ActionFunctionArgs) {
+  const { session, billing, actor } = await requireAdmin(request);
+  const form = await request.formData();
+  const intent = String(form.get("intent") || "");
   try {
-    if (intent === "save-settings") {
-      await prisma.shopSettings.upsert({
-        where: { shop },
-        update: {
-          billingPlan: String(formData.get("billingPlan") || "GROWTH"),
-          accountingPlatform: String(formData.get("accountingPlatform") || "") || null,
-          autoSyncCogs: formData.get("autoSyncCogs") === "on",
-          requireReview: formData.get("requireReview") === "on",
-          defaultCurrency: String(formData.get("defaultCurrency") || "USD").toUpperCase(),
-        },
-        create: {
-          shop,
-          billingPlan: String(formData.get("billingPlan") || "GROWTH"),
-          accountingPlatform: String(formData.get("accountingPlatform") || "") || null,
-          autoSyncCogs: formData.get("autoSyncCogs") === "on",
-          requireReview: formData.get("requireReview") === "on",
-          defaultCurrency: String(formData.get("defaultCurrency") || "USD").toUpperCase(),
-        },
-      });
-      return json({ success: true, message: "Settings saved" });
-    }
-
     if (intent === "start-billing") {
-      const plan = String(formData.get("plan") || SMARTBILL_PLANS.GROWTH);
-      const url = new URL(request.url);
-      return billing.request({
-        plan,
-        isTest: process.env.NODE_ENV !== "production",
-        returnUrl: `${url.origin}/app/settings`,
+      const key = planFromName(String(form.get("plan")));
+      if (!key) throw new Error("Choose a valid plan.");
+      return await billing.request({
+        plan: PLANS[key].name,
+        isTest:
+          process.env.NODE_ENV !== "production" ||
+          process.env.SHOPIFY_BILLING_TEST === "true",
+        returnUrl: `${process.env.SHOPIFY_APP_URL?.replace(/\/$/, "") || new URL(request.url).origin}/app/settings`,
       });
     }
-
-    if (intent === "connect-accounting") {
-      const platform = String(formData.get("platform") || "");
-      const url = new URL(request.url);
-
-      if (platform === "XERO") {
-        const redirectUri = `${url.origin}/accounting/xero/callback`;
+    if (intent === "save-settings") {
+      await requireSubscription(request);
+      const currency = String(form.get("defaultCurrency")).toUpperCase();
+      if (!validCurrency(currency))
+        throw new Error("Enter a valid ISO currency code.");
+      const minutes = Number(form.get("minutesSavedPerInvoice"));
+      if (!Number.isFinite(minutes) || minutes < 0 || minutes > 120)
+        throw new Error("Time saved must be between 0 and 120 minutes.");
+      const data = {
+        defaultCurrency: currency,
+        dateOrder: form.get("dateOrder") === "MDY" ? "MDY" : "DMY",
+        requireReview: true,
+        autoSyncCogs: false,
+        xeroAccountCode:
+          String(form.get("xeroAccountCode") || "").trim() || null,
+        xeroTaxType: String(form.get("xeroTaxType") || "").trim() || null,
+        quickBooksAccountId:
+          String(form.get("quickBooksAccountId") || "").trim() || null,
+        quickBooksTaxCodeId:
+          String(form.get("quickBooksTaxCodeId") || "").trim() || null,
+        minutesSavedPerInvoice: minutes,
+      };
+      await prisma.shopSettings.update({ where: { shop: session.shop }, data });
+      await prisma.auditEvent.create({
+        data: { shop: session.shop, actor, action: "SETTINGS_UPDATED" },
+      });
+    } else if (intent === "enable-inbox") {
+      await requireSubscription(request, "bulk");
+      if (
+        !process.env.INBOUND_EMAIL_DOMAIN ||
+        !process.env.INBOUND_EMAIL_SECRET
+      )
+        throw new Error(
+          "Email capture has not been configured by the app operator.",
+        );
+      await prisma.shopSettings.update({
+        where: { shop: session.shop },
+        data: { inboundAlias: randomUUID().replace(/-/g, "") },
+      });
+    } else if (intent === "staff-role") {
+      if (!session.onlineAccessInfo?.associated_user.account_owner)
+        throw new Error("Only the store owner can change staff permissions.");
+      await requireSubscription(request);
+      await prisma.session.updateMany({
+        where: {
+          id: String(form.get("staffId")),
+          shop: session.shop,
+          isOnline: true,
+          accountOwner: false,
+        },
+        data: { role: form.get("role") === "ADMIN" ? "ADMIN" : "SCANNER" },
+      });
+      await prisma.auditEvent.create({
+        data: {
+          shop: session.shop,
+          actor,
+          action: "STAFF_ROLE_UPDATED",
+          detail: {
+            staffId: String(form.get("staffId")),
+            role: String(form.get("role")),
+          },
+        },
+      });
+    } else if (intent === "connect-accounting") {
+      await requireSubscription(request);
+      const base =
+        process.env.SHOPIFY_APP_URL?.replace(/\/$/, "") ||
+        new URL(request.url).origin;
+      const platform = String(form.get("platform"));
+      if (platform === "XERO")
         return redirect(
           await getXeroAuthUrl(
-            redirectUri,
-            createAccountingState(shop, "XERO"),
+            `${base}/accounting/xero/callback`,
+            createAccountingState(session.shop, "XERO"),
           ),
         );
-      }
-
-      if (platform === "QUICKBOOKS") {
-        const redirectUri = `${url.origin}/accounting/quickbooks/callback`;
+      if (platform === "QUICKBOOKS")
         return redirect(
           await getQuickBooksAuthUrl(
-            redirectUri,
-            createAccountingState(shop, "QUICKBOOKS"),
+            `${base}/accounting/quickbooks/callback`,
+            createAccountingState(session.shop, "QUICKBOOKS"),
           ),
         );
-      }
-
-      return json(
-        { success: false, error: "Unsupported accounting platform" },
-        { status: 400 },
-      );
-    }
-
-    return json({ success: false, error: "Unknown action" }, { status: 400 });
+      throw new Error("Unknown accounting platform.");
+    } else if (intent === "disconnect-accounting") {
+      await prisma.accountingConnection.deleteMany({
+        where: { shop: session.shop, platform: String(form.get("platform")) },
+      });
+      const remaining = await prisma.accountingConnection.count({
+        where: { shop: session.shop },
+      });
+      await prisma.shopSettings.update({
+        where: { shop: session.shop },
+        data: { accountingConnected: remaining > 0 },
+      });
+    } else throw new Error("Unknown action.");
+    return json({ success: true as const, message: "Settings saved." });
   } catch (error) {
+    if (error instanceof Response) throw error;
     return json(
-      { success: false, error: error instanceof Error ? error.message : String(error) },
+      {
+        success: false as const,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Settings could not be saved.",
+      },
       { status: 400 },
     );
   }
-};
-
+}
 export default function Settings() {
-  const { settings, plans, accountingConnections } =
-    useLoaderData<typeof loader>();
-  const actionData = useActionData<typeof action>();
-  const navigation = useNavigation();
-  const [billingPlan, setBillingPlan] = useState(settings.billingPlan);
-  const [accountingPlatform, setAccountingPlatform] = useState(settings.accountingPlatform || "");
-  const [defaultCurrency, setDefaultCurrency] = useState(settings.defaultCurrency);
-  const [autoSyncCogs, setAutoSyncCogs] = useState(settings.autoSyncCogs);
-  const [requireReview, setRequireReview] = useState(settings.requireReview);
-  const isSubmitting = navigation.state === "submitting";
-  const connectedPlatforms = new Set(
-    accountingConnections.map((connection) => connection.platform),
-  );
-
+  const {
+    settings,
+    subscription,
+    used,
+    connections,
+    owner,
+    staff,
+    inboxReady,
+    inboxDomain,
+  } = useLoaderData<typeof loader>();
+  const result = useActionData<typeof action>();
+  const busy = useNavigation().state !== "idle";
   return (
-    <Page title="Settings" subtitle="Configure billing, review controls, COGS sync defaults, and accounting export behavior.">
+    <Page
+      title="Settings and plans"
+      subtitle="Affordable invoice control with approval before every financial change."
+    >
       <BlockStack gap="500">
-        {actionData?.success && (
-          <Banner tone="success" title={actionData.message}>
-            <p>Your SmartBill settings are current.</p>
+        {result && (
+          <Banner tone={result.success ? "success" : "critical"}>
+            {result.success ? result.message : result.error}
           </Banner>
         )}
-        {actionData && !actionData.success && (
-          <Banner tone="critical" title="Settings action failed">
-            <p>{actionData.error}</p>
-          </Banner>
-        )}
-
-        <Layout>
-          <Layout.Section>
-            <Card>
-              <Form method="post">
-                <input type="hidden" name="intent" value="save-settings" />
-                <BlockStack gap="400">
-                  <Text as="h2" variant="headingMd">
-                    Operating defaults
-                  </Text>
-                  <Select
-                    label="Internal plan marker"
-                    name="billingPlan"
-                    options={[
-                      { label: "Growth", value: "GROWTH" },
-                      { label: "Scale", value: "SCALE" },
-                    ]}
-                    value={billingPlan}
-                    onChange={setBillingPlan}
-                  />
-                  <TextField
-                    label="Default currency"
-                    name="defaultCurrency"
-                    value={defaultCurrency}
-                    onChange={setDefaultCurrency}
-                    autoComplete="off"
-                    maxLength={3}
-                  />
-                  <Select
-                    label="Accounting platform"
-                    name="accountingPlatform"
-                    value={accountingPlatform}
-                    onChange={setAccountingPlatform}
-                    options={[
-                      { label: "CSV export package", value: "" },
-                      { label: "Xero payloads", value: "XERO" },
-                      { label: "QuickBooks payloads", value: "QUICKBOOKS" },
-                    ]}
-                  />
-                  <Checkbox
-                    label="Require human review before accounting export"
-                    name="requireReview"
-                    checked={requireReview}
-                    onChange={setRequireReview}
-                  />
-                  <Checkbox
-                    label="Enable COGS sync by default during invoice capture"
-                    name="autoSyncCogs"
-                    checked={autoSyncCogs}
-                    onChange={setAutoSyncCogs}
-                  />
-                  <Button submit variant="primary" loading={isSubmitting}>
-                    Save settings
-                  </Button>
-                </BlockStack>
-              </Form>
-            </Card>
-          </Layout.Section>
-
-          <Layout.Section variant="oneThird">
-            <Card>
-              <BlockStack gap="300">
-                <Text as="h2" variant="headingMd">
-                  Billing
-                </Text>
-                <InlineStack gap="200">
-                  <Badge tone="info">{settings.billingPlan}</Badge>
-                  <Badge tone={settings.accountingConnected ? "success" : "warning"}>
-                    {settings.accountingConnected ? "Accounting connected" : "Export package mode"}
-                  </Badge>
-                </InlineStack>
-                {plans.map((plan) => (
-                  <Form method="post" key={plan.value}>
-                    <input type="hidden" name="intent" value="start-billing" />
-                    <input type="hidden" name="plan" value={plan.value} />
-                    <Button submit loading={isSubmitting}>
-                      Start {plan.label}
+        <Card>
+          <BlockStack gap="300">
+            <Text as="h2" variant="headingMd">
+              Choose your plan
+            </Text>
+            {subscription && !subscription.matchesPrice && (
+              <Banner tone="info">
+                Your existing subscription uses earlier pricing. Choose a plan
+                below and approve the lower price in Shopify to replace it.
+              </Banner>
+            )}
+            <Text as="p">
+              {subscription
+                ? `${PLANS[subscription.plan].label}: ${used} / ${PLANS[subscription.plan].invoiceLimit} invoices used this calendar month.`
+                : "Start a 14-day trial to capture and process invoices."}
+            </Text>
+            <InlineStack gap="400">
+              {Object.entries(PLANS).map(([key, plan]) => (
+                <Form method="post" key={key} style={{ flex: "1 1 260px" }}>
+                  <input type="hidden" name="intent" value="start-billing" />
+                  <input type="hidden" name="plan" value={plan.name} />
+                  <BlockStack gap="200">
+                    <Text as="h3" variant="headingMd">
+                      {plan.label} — $ {plan.price} USD / 30 days
+                    </Text>
+                    <Text as="p">{plan.description}</Text>
+                    <Button
+                      submit
+                      loading={busy}
+                      disabled={
+                        subscription?.plan === key && subscription.matchesPrice
+                      }
+                    >
+                      {subscription?.plan === key && subscription.matchesPrice
+                        ? "Current plan"
+                        : `Start ${TRIAL_DAYS}-day trial / switch`}
+                    </Button>
+                  </BlockStack>
+                </Form>
+              ))}
+            </InlineStack>
+            <Text as="p" tone="subdued">
+              No automatic overage fees. Allowances reset on the first of each
+              month, UTC. Maximum 10 MB and 10 pages per document. Each accepted
+              upload counts once; retries of that upload are included.
+            </Text>
+          </BlockStack>
+        </Card>
+        <Card>
+          <Form method="post">
+            <input type="hidden" name="intent" value="save-settings" />
+            <BlockStack gap="300">
+              <Text as="h2" variant="headingMd">
+                Review and accounting defaults
+              </Text>
+              <Badge tone="success">Approval always required</Badge>
+              <label>
+                Default reporting / PO currency{" "}
+                <input
+                  name="defaultCurrency"
+                  defaultValue={settings.defaultCurrency}
+                  maxLength={3}
+                  required
+                />
+              </label>
+              <label>
+                Numeric invoice date order{" "}
+                <select name="dateOrder" defaultValue={settings.dateOrder}>
+                  <option value="DMY">Day / month / year</option>
+                  <option value="MDY">Month / day / year</option>
+                </select>
+              </label>
+              <label>
+                Xero purchase account code{" "}
+                <input
+                  name="xeroAccountCode"
+                  defaultValue={settings.xeroAccountCode || ""}
+                />
+              </label>
+              <label>
+                Xero purchase tax type{" "}
+                <input
+                  name="xeroTaxType"
+                  placeholder="Use the tax type from your Xero organisation"
+                  defaultValue={settings.xeroTaxType || ""}
+                />
+              </label>
+              <label>
+                QuickBooks expense account ID{" "}
+                <input
+                  name="quickBooksAccountId"
+                  defaultValue={settings.quickBooksAccountId || ""}
+                />
+              </label>
+              <label>
+                QuickBooks tax code ID{" "}
+                <input
+                  name="quickBooksTaxCodeId"
+                  defaultValue={settings.quickBooksTaxCodeId || ""}
+                />
+              </label>
+              <Text as="p" tone="subdued">
+                Live QuickBooks export currently supports untaxed bills. Use the
+                reviewed CSV for bills with purchase tax. Product cost sync
+                requires the invoice and Shopify store currencies to match.
+              </Text>
+              <label>
+                Measured minutes saved per approved invoice{" "}
+                <input
+                  name="minutesSavedPerInvoice"
+                  type="number"
+                  min={0}
+                  max={120}
+                  step="0.1"
+                  defaultValue={settings.minutesSavedPerInvoice}
+                />
+              </label>
+              <Text as="p" tone="subdued">
+                Leave at zero until you have measured this. Weekly reports label
+                the resulting time savings as an estimate.
+              </Text>
+              <Button submit loading={busy}>
+                Save defaults
+              </Button>
+            </BlockStack>
+          </Form>
+        </Card>
+        <Card>
+          <BlockStack gap="300">
+            <Text as="h2" variant="headingMd">
+              Accounting connections
+            </Text>
+            <InlineStack gap="300">
+              {["XERO", "QUICKBOOKS"].map((platform) => {
+                const connected = connections.some(
+                  (c) => c.platform === platform,
+                );
+                return (
+                  <Form method="post" key={platform}>
+                    <input
+                      type="hidden"
+                      name="intent"
+                      value={
+                        connected
+                          ? "disconnect-accounting"
+                          : "connect-accounting"
+                      }
+                    />
+                    <input type="hidden" name="platform" value={platform} />
+                    <Button submit loading={busy}>
+                      {connected ? "Disconnect" : "Connect"} {platform}
                     </Button>
                   </Form>
+                );
+              })}
+            </InlineStack>
+          </BlockStack>
+        </Card>
+        <Card>
+          <BlockStack gap="300">
+            <Text as="h2" variant="headingMd">
+              Invoice email inbox
+            </Text>
+            <Text as="p">
+              {settings.inboundAlias && inboxReady
+                ? `Forward supplier invoices to ${settings.inboundAlias}@${inboxDomain}.`
+                : "Growth includes an inbox for forwarded supplier PDF and image attachments."}
+            </Text>
+            {inboxReady ? (
+              <Form method="post">
+                <input type="hidden" name="intent" value="enable-inbox" />
+                <Button submit loading={busy}>
+                  {settings.inboundAlias
+                    ? "Replace inbox address"
+                    : "Enable inbox"}
+                </Button>
+              </Form>
+            ) : (
+              <Text as="p" tone="subdued">
+                Email capture is awaiting activation by the app operator. File
+                upload remains available.
+              </Text>
+            )}
+          </BlockStack>
+        </Card>
+        {owner && (
+          <Card>
+            <BlockStack gap="300">
+              <Text as="h2" variant="headingMd">
+                Staff access
+              </Text>
+              <Text as="p">
+                Staff can capture and edit invoices. Approvers can approve,
+                export, manage costs and settings. Staff appear after opening
+                the app.
+              </Text>
+              {staff
+                .filter((s) => !s.accountOwner)
+                .map((s) => (
+                  <Form method="post" key={s.id}>
+                    <input type="hidden" name="intent" value="staff-role" />
+                    <input type="hidden" name="staffId" value={s.id} />
+                    <label>
+                      {s.email || s.firstName || "Staff member"}{" "}
+                      <select name="role" defaultValue={s.role || "SCANNER"}>
+                        <option value="SCANNER">Capture and edit</option>
+                        <option value="ADMIN">Approver</option>
+                      </select>
+                    </label>{" "}
+                    <Button submit>Save access</Button>
+                  </Form>
                 ))}
-              </BlockStack>
-            </Card>
-
-            <div style={{ height: 16 }} />
-
-            <Card>
-              <BlockStack gap="300">
-                <Text as="h2" variant="headingMd">
-                  Accounting connections
-                </Text>
-                <InlineStack gap="200">
-                  <Badge tone={connectedPlatforms.has("XERO") ? "success" : "info"}>
-                    {connectedPlatforms.has("XERO") ? "Xero connected" : "Xero"}
-                  </Badge>
-                  <Badge
-                    tone={
-                      connectedPlatforms.has("QUICKBOOKS") ? "success" : "info"
-                    }
-                  >
-                    {connectedPlatforms.has("QUICKBOOKS")
-                      ? "QuickBooks connected"
-                      : "QuickBooks"}
-                  </Badge>
-                </InlineStack>
-                <Form method="post">
-                  <input type="hidden" name="intent" value="connect-accounting" />
-                  <input type="hidden" name="platform" value="XERO" />
-                  <Button submit loading={isSubmitting}>
-                    Connect Xero
-                  </Button>
-                </Form>
-                <Form method="post">
-                  <input type="hidden" name="intent" value="connect-accounting" />
-                  <input type="hidden" name="platform" value="QUICKBOOKS" />
-                  <Button submit loading={isSubmitting}>
-                    Connect QuickBooks
-                  </Button>
-                </Form>
-              </BlockStack>
-            </Card>
-
-            <div style={{ height: 16 }} />
-
-            <Card>
-              <BlockStack gap="300">
-                <Text as="h2" variant="headingMd">
-                  Security posture
-                </Text>
-                <Text as="p" tone="subdued">
-                  Invoice documents are stored as private storage references. Keep Firebase and accounting credentials in environment variables only.
-                </Text>
-                <Badge tone="success">Public invoice files disabled</Badge>
-              </BlockStack>
-            </Card>
-          </Layout.Section>
-        </Layout>
+            </BlockStack>
+          </Card>
+        )}
       </BlockStack>
     </Page>
   );

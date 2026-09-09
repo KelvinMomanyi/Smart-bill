@@ -6,7 +6,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
 
   try {
-    const { imageUrl, ocrText, syncCogs, purchaseOrderId, vendorName } = await request.json();
+    const { imageUrl, ocrText, syncCogs, purchaseOrderId, vendorName } =
+      await request.json();
     const result = await createInvoiceFromInput({
       request,
       shop: session.shop,
@@ -25,8 +26,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       warnings: result.warnings,
     });
   } catch (error) {
+    if (error instanceof Response) throw error;
     return json(
-      { success: false, error: error instanceof Error ? error.message : String(error) },
+      {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      },
       { status: 400 },
     );
   }

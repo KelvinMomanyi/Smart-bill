@@ -1,63 +1,32 @@
-// app/routes/api.upload-invoice.ts
-import type { ActionFunction } from "@remix-run/node";
-import { json } from "@remix-run/node";
-import { uploadInvoiceImage } from "../utils/upload.server";
-import { extractTextFromFile } from "../utils/ocr.server";
-import { authenticate } from "../shopify.server";
-
-export const action: ActionFunction = async ({ request }) => {
+import { json, type ActionFunctionArgs } from "@remix-run/node";
+import { requireSubscription } from "../services/billing.server";
+import { enqueueDocument } from "../services/invoiceJobs.server";
+export async function action({ request }: ActionFunctionArgs) {
   try {
-    await authenticate.admin(request);
-    const formData = await request.formData();
-    const file = formData.get("file");
-
-    if (!(file instanceof File)) {
-      return json({ error: "No file provided" }, { status: 400 });
-    }
-
-    const arrayBuffer = await file.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-
-    let extractedText = "";
-    let uploadUrl = "";
-
-    if (
-      !file.type.startsWith("image/") &&
-      file.type !== "application/pdf" &&
-      !file.name.toLowerCase().endsWith(".pdf")
-    ) {
-      return json(
-        { error: "Upload an invoice image or PDF." },
-        { status: 400 },
-      );
-    }
-
-    try {
-      extractedText = await extractTextFromFile(buffer, {
-        filename: file.name,
-        mimeType: file.type,
-      });
-    } catch (ocrError) {
-      console.error("OCR failed:", ocrError);
-      // Continue with upload even if OCR fails.
-    }
-
-    // Upload to Firebase
-    try {
-      uploadUrl = await uploadInvoiceImage(buffer, file.name, file.type);
-    } catch (uploadError) {
-      console.error("Upload failed:", uploadError);
-      return json({ error: "File upload failed" }, { status: 500 });
-    }
-
-    return json({
-      success: true,
-      uploadUrl,
-      extractedText,
+    const { session, plan } = await requireSubscription(request);
+    const form = await request.formData();
+    const file = form.get("file");
+    if (!(file instanceof File) || !file.size)
+      throw new Error("Select a document.");
+    const job = await enqueueDocument({
+      shop: session.shop,
+      plan,
+      buffer: Buffer.from(await file.arrayBuffer()),
       filename: file.name,
+      contentType: file.type,
     });
+    return json(
+      { success: true, jobId: job.id, status: job.status },
+      { status: 202 },
+    );
   } catch (error) {
-    console.error("Processing failed:", error);
-    return json({ error: "Processing failed" }, { status: 500 });
+    if (error instanceof Response) throw error;
+    return json(
+      {
+        success: false,
+        error: error instanceof Error ? error.message : "Upload failed.",
+      },
+      { status: 400 },
+    );
   }
-};
+}

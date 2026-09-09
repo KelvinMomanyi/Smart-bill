@@ -4,19 +4,23 @@ import { boundary } from "@shopify/shopify-app-remix/server";
 import { AppProvider } from "@shopify/shopify-app-remix/react";
 import { NavMenu } from "@shopify/app-bridge-react";
 import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
+import formStyles from "../styles/forms.css?url";
 
 import { authenticate } from "../shopify.server";
 import { getUserRole } from "../utils/rbac.server";
 
-export const links = () => [{ rel: "stylesheet", href: polarisStyles }];
+export const links = () => [
+  { rel: "stylesheet", href: polarisStyles },
+  { rel: "stylesheet", href: formStyles },
+];
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
   const role = await getUserRole(request);
 
-  return { 
+  return {
     apiKey: process.env.SHOPIFY_API_KEY || "",
-    role
+    role,
   };
 };
 
@@ -34,11 +38,14 @@ export default function App() {
           <>
             <Link to="/app/reconciliation">Purchase Orders</Link>
             <Link to="/app/analytics">Vendor Analytics</Link>
+            <Link to="/app/reports">Weekly report</Link>
             <Link to="/app/settings">Settings</Link>
           </>
         )}
       </NavMenu>
-      <Outlet />
+      <main className="smartbill-workspace">
+        <Outlet />
+      </main>
     </AppProvider>
   );
 }

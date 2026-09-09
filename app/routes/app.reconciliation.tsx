@@ -1,5 +1,15 @@
-import { json, type ActionFunctionArgs, type LoaderFunctionArgs } from "@remix-run/node";
-import { Form, useActionData, useLoaderData, useNavigation } from "@remix-run/react";
+import {
+  json,
+  type ActionFunctionArgs,
+  type LoaderFunctionArgs,
+} from "@remix-run/node";
+import {
+  Form,
+  Link,
+  useActionData,
+  useLoaderData,
+  useNavigation,
+} from "@remix-run/react";
 import {
   Badge,
   Banner,
@@ -15,7 +25,8 @@ import {
 } from "@shopify/polaris";
 import { useState } from "react";
 import prisma from "../db.server";
-import { authenticate } from "../shopify.server";
+import { requireSubscription } from "../services/billing.server";
+import { getShopSettings } from "../services/invoiceWorkflow.server";
 import { formatMoney } from "../utils/format";
 import { parsePoItems, parseStructuredPoItems } from "../utils/poItems.server";
 import { requireAdmin } from "../utils/rbac.server";
@@ -39,12 +50,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { session } = await requireAdmin(request);
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
   const shop = session.shop;
 
   try {
+    await requireSubscription(request);
     if (intent === "create-po") {
       const vendorName = String(formData.get("vendorName") || "").trim();
       const poNumber = String(formData.get("poNumber") || "").trim();
@@ -56,7 +68,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const fallbackItems = items.length > 0 ? items : parsePoItems(itemRows);
 
       if (!vendorName) throw new Error("Vendor name is required");
-      if (fallbackItems.length === 0) throw new Error("Add at least one PO item");
+      if (fallbackItems.length === 0)
+        throw new Error("Add at least one PO item");
 
       const vendor = await prisma.vendor.upsert({
         where: { shop_name: { shop, name: vendorName } },
@@ -72,6 +85,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       await prisma.purchaseOrder.create({
         data: {
           shop,
+          currency: (await getShopSettings(shop)).defaultCurrency,
           vendorId: vendor.id,
           poNumber: poNumber || null,
           expectedDate: expectedDate ? new Date(expectedDate) : null,
@@ -91,22 +105,29 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         },
       });
 
-      return json({ success: true, message: "Purchase order created" });
+      return json({
+        success: true as const,
+        message: "Purchase order created",
+      });
     }
 
     if (intent === "close-po") {
-      const poId = String(formData.get("poId") || "");
-      await prisma.purchaseOrder.updateMany({
-        where: { id: poId, shop },
-        data: { status: "FULFILLED" },
-      });
-      return json({ success: true, message: "Purchase order closed" });
+      throw new Error(
+        "Record the physical delivery using Receive stock. An invoice cannot confirm a delivery.",
+      );
     }
 
-    return json({ success: false, error: "Unknown action" }, { status: 400 });
-  } catch (error) {
     return json(
-      { success: false, error: error instanceof Error ? error.message : String(error) },
+      { success: false as const, error: "Unknown action" },
+      { status: 400 },
+    );
+  } catch (error) {
+    if (error instanceof Response) throw error;
+    return json(
+      {
+        success: false as const,
+        error: error instanceof Error ? error.message : String(error),
+      },
       { status: 400 },
     );
   }
@@ -175,11 +196,7 @@ export default function PurchaseOrders() {
       })),
   );
 
-  const updateItem = (
-    index: number,
-    field: keyof PoFormRow,
-    value: string,
-  ) => {
+  const updateItem = (index: number, field: keyof PoFormRow, value: string) => {
     setItems((currentItems) =>
       currentItems.map((item, itemIndex) =>
         itemIndex === index ? { ...item, [field]: value } : item,
@@ -187,7 +204,8 @@ export default function PurchaseOrders() {
     );
   };
 
-  const addItem = () => setItems((currentItems) => [...currentItems, emptyPoRow()]);
+  const addItem = () =>
+    setItems((currentItems) => [...currentItems, emptyPoRow()]);
   const removeItem = (index: number) =>
     setItems((currentItems) =>
       currentItems.length === 1
@@ -205,23 +223,32 @@ export default function PurchaseOrders() {
     const invoiceCount = po.linkedInvoices.length;
 
     return [
-      po.poNumber || po.id.slice(0, 8),
+      <Link key={po.id} to={`/app/receipts/${po.id}`}>
+        {po.poNumber || po.id.slice(0, 8)} — Receive stock
+      </Link>,
       po.vendor.name,
       <Badge key={`${po.id}-status`} tone={statusTone(po.status)}>
         {po.status}
       </Badge>,
       `${received}/${expected}`,
       invoiceCount.toString(),
-      formatMoney(po.totalAmount || 0),
+      formatMoney(po.totalAmount || 0, po.currency),
       po.updatedAt ? new Date(po.updatedAt).toLocaleDateString() : "",
     ];
   });
 
-  const mismatchCount = purchaseOrders.filter((po) => po.status === "MISMATCH").length;
-  const openCount = purchaseOrders.filter((po) => ["OPEN", "PARTIAL"].includes(po.status)).length;
+  const mismatchCount = purchaseOrders.filter(
+    (po) => po.status === "MISMATCH",
+  ).length;
+  const openCount = purchaseOrders.filter((po) =>
+    ["OPEN", "PARTIAL"].includes(po.status),
+  ).length;
 
   return (
-    <Page title="Purchase orders" subtitle="Create expected supplier orders and let SmartBill match incoming invoices against them.">
+    <Page
+      title="Purchase orders"
+      subtitle="Create expected supplier orders and let SmartBill match incoming invoices against them."
+    >
       <BlockStack gap="500">
         {actionData?.success && (
           <Banner tone="success" title={actionData.message}>
@@ -234,7 +261,13 @@ export default function PurchaseOrders() {
           </Banner>
         )}
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "16px" }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+            gap: "16px",
+          }}
+        >
           <Card>
             <BlockStack gap="200">
               <Text as="p" tone="subdued">
@@ -343,7 +376,8 @@ export default function PurchaseOrders() {
                             updateItem(index, "quantity", value)
                           }
                           type="number"
-                          min={1}
+                          min={0.001}
+                          step={0.001}
                           autoComplete="off"
                         />
                         <TextField
@@ -377,7 +411,10 @@ export default function PurchaseOrders() {
                     helpText="Optional bulk import: SKU Name | quantity | expected unit cost. Commas also work."
                   />
                   <InlineStack gap="300">
-                    <Button onClick={importBulkRows} disabled={!itemRows.trim()}>
+                    <Button
+                      onClick={importBulkRows}
+                      disabled={!itemRows.trim()}
+                    >
                       Import pasted rows
                     </Button>
                   </InlineStack>
@@ -404,10 +441,13 @@ export default function PurchaseOrders() {
                   Matching rules
                 </Text>
                 <Text as="p" tone="subdued">
-                  SmartBill matches invoice line items to PO rows by normalized item names and token overlap, then recalculates received quantities from linked invoices.
+                  SmartBill matches exact supplier SKUs or unique item names.
+                  Invoices update billed quantities; only a recorded delivery
+                  updates physically received quantities.
                 </Text>
                 <Text as="p" tone="subdued">
-                  Price, quantity, and unexpected item differences are written back to the invoice review queue.
+                  Price, quantity, and unexpected item differences are written
+                  back to the invoice review queue.
                 </Text>
               </BlockStack>
             </Card>
@@ -421,8 +461,24 @@ export default function PurchaseOrders() {
             </Text>
             {rows.length > 0 ? (
               <DataTable
-                columnContentTypes={["text", "text", "text", "text", "numeric", "numeric", "text"]}
-                headings={["PO", "Vendor", "Status", "Received", "Invoices", "Expected total", "Updated"]}
+                columnContentTypes={[
+                  "text",
+                  "text",
+                  "text",
+                  "text",
+                  "numeric",
+                  "numeric",
+                  "text",
+                ]}
+                headings={[
+                  "PO",
+                  "Vendor",
+                  "Status",
+                  "Received",
+                  "Invoices",
+                  "Expected total",
+                  "Updated",
+                ]}
                 rows={rows}
               />
             ) : (
