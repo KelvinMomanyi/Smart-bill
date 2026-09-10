@@ -15,6 +15,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       data: { status: "CANCELLED", leaseToken: null },
     }),
     db.accountingConnection.deleteMany({ where: { shop } }),
+    db.accountingAuthorization.deleteMany({ where: { shop } }),
     db.session.deleteMany({ where: { shop } }),
   ]);
 

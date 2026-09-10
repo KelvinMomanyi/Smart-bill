@@ -1,4 +1,5 @@
 import type { QuickBooksRef } from "./quickbook";
+import type { validateBillMapping } from "./accountingValidation";
 
 export type AccountingPlatform = "XERO" | "QUICKBOOKS" | "CSV";
 
@@ -8,6 +9,9 @@ type AccountingFormatOptions = {
   xeroAccountCode?: string;
   xeroTaxType?: string;
   quickBooksTaxCodeId?: string;
+  xeroContactRef?: { ContactID: string; Name: string };
+  validated?: ReturnType<typeof validateBillMapping>;
+  quickBooksMultiCurrency?: boolean;
 };
 
 function isoDate(value?: Date | string | null) {
@@ -69,6 +73,33 @@ export function allocateTax(tax: number, amounts: number[]) {
 
 export function formatForPlatform(
   invoice: any,
+  platform: "XERO",
+  options?: AccountingFormatOptions,
+): Extract<ReturnType<typeof formatPayload>, { Type: string }>;
+export function formatForPlatform(
+  invoice: any,
+  platform: "QUICKBOOKS",
+  options?: AccountingFormatOptions,
+): Extract<ReturnType<typeof formatPayload>, { Line: any[] }>;
+export function formatForPlatform(
+  invoice: any,
+  platform: "CSV",
+  options?: AccountingFormatOptions,
+): Extract<ReturnType<typeof formatPayload>, { invoiceId: any }>;
+export function formatForPlatform(
+  invoice: any,
+  platform: AccountingPlatform,
+  options?: AccountingFormatOptions,
+): ReturnType<typeof formatPayload>;
+export function formatForPlatform(
+  invoice: any,
+  platform: AccountingPlatform,
+  options: AccountingFormatOptions = {},
+) {
+  return formatPayload(invoice, platform, options);
+}
+function formatPayload(
+  invoice: any,
   platform: AccountingPlatform,
   options: AccountingFormatOptions = {},
 ) {
@@ -82,20 +113,36 @@ export function formatForPlatform(
     );
     return {
       Type: "ACCPAY",
-      Contact: { Name: invoice.vendor?.name || "Unknown Vendor" },
+      Contact: options.xeroContactRef || {
+        Name: invoice.vendor?.name || "Unknown Vendor",
+      },
       InvoiceNumber: invoice.invoiceNumber,
       Reference: invoice.purchaseOrder?.poNumber,
-      DateString: isoDate(invoice.date),
-      DueDateString: isoDate(invoice.dueDate || invoice.date),
+      Date: isoDate(invoice.date),
+      DueDate: isoDate(invoice.dueDate || invoice.date),
+      Status: "DRAFT",
       CurrencyCode: invoice.currency || "USD",
       LineAmountTypes: "Exclusive",
+      ...(options.validated?.exchangeRate
+        ? {
+            CurrencyRate: Number(
+              (1 / options.validated.exchangeRate).toFixed(6),
+            ),
+          }
+        : {}),
       LineItems: lineItems.map((item: any, index: number) => ({
         Description: lineDescription(item),
         Quantity: item.quantity,
         UnitAmount: item.unitAmount,
-        AccountCode: options.xeroAccountCode || configuredXeroAccountCode(),
-        ...(taxType ? { TaxType: taxType } : {}),
-        ...((invoice.tax || 0) > 0 ? { TaxAmount: taxAmounts[index] } : {}),
+        LineAmount: item.amount,
+        AccountCode:
+          options.validated?.lines[index].accountId ||
+          options.xeroAccountCode ||
+          configuredXeroAccountCode(),
+        TaxType: options.validated?.lines[index].taxCodeId || taxType,
+        TaxAmount: options.validated
+          ? options.validated.lines[index].taxAmount
+          : taxAmounts[index],
       })),
     };
   }
@@ -108,6 +155,22 @@ export function formatForPlatform(
         name: envValue("QB_EXPENSE_ACCOUNT_NAME") || "Cost of Goods Sold",
       };
     const taxCodeId = options.quickBooksTaxCodeId || envValue("QB_TAX_CODE_ID");
+    const validated = options.validated;
+    const taxDetails = new Map<
+      string,
+      { id: string; rate: number; taxable: number; amount: number }
+    >();
+    for (const line of validated?.lines || []) {
+      for (const component of line.components) {
+        const key = `${component.id}:${component.rate}`;
+        const previous = taxDetails.get(key);
+        taxDetails.set(key, {
+          ...component,
+          taxable: money((previous?.taxable || 0) + component.taxable),
+          amount: money((previous?.amount || 0) + component.amount),
+        });
+      }
+    }
 
     return {
       VendorRef: vendorRef,
@@ -117,17 +180,63 @@ export function formatForPlatform(
         : undefined,
       TxnDate: isoDate(invoice.date),
       DueDate: isoDate(invoice.dueDate || invoice.date),
-      CurrencyRef: { value: invoice.currency || "USD" },
-      Line: lineItems.map((item: any) => ({
-        Amount: item.amount,
-        DetailType: "AccountBasedExpenseLineDetail",
-        Description: lineDescription(item),
-        AccountBasedExpenseLineDetail: {
-          AccountRef: accountRef,
-          BillableStatus: "NotBillable",
-          ...(taxCodeId ? { TaxCodeRef: { value: taxCodeId } } : {}),
-        },
-      })),
+      ...(options.quickBooksMultiCurrency !== false
+        ? { CurrencyRef: { value: invoice.currency || "USD" } }
+        : {}),
+      ...(validated?.exchangeRate
+        ? { ExchangeRate: validated.exchangeRate }
+        : {}),
+      ...(validated && !validated.us
+        ? {
+            GlobalTaxCalculation: "TaxExcluded",
+            TxnTaxDetail: {
+              TotalTax: money(invoice.tax || 0),
+              TaxLine: [...taxDetails.values()].map((t) => ({
+                Amount: t.amount,
+                DetailType: "TaxLineDetail",
+                TaxLineDetail: {
+                  TaxRateRef: { value: t.id },
+                  PercentBased: true,
+                  TaxPercent: t.rate,
+                  NetAmountTaxable: t.taxable,
+                },
+              })),
+            },
+          }
+        : {}),
+      Line: [
+        ...lineItems.map((item: any, index: number) => ({
+          Amount: item.amount,
+          DetailType: "AccountBasedExpenseLineDetail",
+          Description: lineDescription(item),
+          AccountBasedExpenseLineDetail: {
+            AccountRef: validated
+              ? { value: validated.lines[index].accountId }
+              : accountRef,
+            BillableStatus: "NotBillable",
+            ...(validated
+              ? validated.lines[index].taxCodeId
+                ? { TaxCodeRef: { value: validated.lines[index].taxCodeId } }
+                : {}
+              : taxCodeId
+                ? { TaxCodeRef: { value: taxCodeId } }
+                : {}),
+          },
+        })),
+        ...(validated?.taxAccountId
+          ? [
+              {
+                Amount: money(invoice.tax || 0),
+                Description: "Non-recoverable purchase sales tax",
+                DetailType: "AccountBasedExpenseLineDetail",
+                AccountBasedExpenseLineDetail: {
+                  AccountRef: { value: validated.taxAccountId },
+                  BillableStatus: "NotBillable",
+                },
+              },
+            ]
+          : []),
+      ],
     };
   }
 

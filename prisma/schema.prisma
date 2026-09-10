@@ -73,27 +73,27 @@ model PurchaseOrder {
 }
 
 model PurchaseOrderItem {
-  id               String        @id @default(uuid())
+  id               String             @id @default(uuid())
   purchaseOrderId  String
-  purchaseOrder    PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  purchaseOrder    PurchaseOrder      @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
   sku              String?
   shopifyProductId String?
   shopifyVariantId String?
   name             String
   expectedQty      Float
-  receivedQty      Float         @default(0)
-  billedQty        Float         @default(0)
+  receivedQty      Float              @default(0)
+  billedQty        Float              @default(0)
   expectedRate     Float?
   receiptItems     GoodsReceiptItem[]
 }
 
 model Invoice {
-  id                 String         @id @default(uuid())
+  id                 String             @id @default(uuid())
   shop               String
   vendorId           String?
-  vendor             Vendor?        @relation(fields: [vendorId], references: [id])
+  vendor             Vendor?            @relation(fields: [vendorId], references: [id])
   purchaseOrderId    String?
-  purchaseOrder      PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+  purchaseOrder      PurchaseOrder?     @relation(fields: [purchaseOrderId], references: [id])
   invoiceNumber      String?
   imageUrl           String
   storageKey         String?
@@ -101,25 +101,27 @@ model Invoice {
   rawText            String?
   date               DateTime
   dueDate            DateTime?
-  currency           String         @default("USD")
+  currency           String             @default("USD")
   subtotal           Float?
   tax                Float?
   total              Float
-  status             String         @default("PENDING_SYNC") // PENDING_SYNC, SYNCED
-  reviewStatus       String         @default("PENDING_REVIEW") // PENDING_REVIEW, NEEDS_ATTENTION, APPROVED
-  cogsSyncStatus     String         @default("NOT_REQUESTED") // NOT_REQUESTED, SYNCED, FAILED
-  accountingStatus   String         @default("NOT_EXPORTED") // NOT_EXPORTED, EXPORTED
+  status             String             @default("PENDING_SYNC") // PENDING_SYNC, SYNCED
+  reviewStatus       String             @default("PENDING_REVIEW") // PENDING_REVIEW, NEEDS_ATTENTION, APPROVED
+  cogsSyncStatus     String             @default("NOT_REQUESTED") // NOT_REQUESTED, SYNCED, FAILED
+  accountingStatus   String             @default("NOT_EXPORTED") // NOT_EXPORTED, EXPORTED
   discrepancySummary String?
   documentHash       String?
   identityKey        String?
   approvedAt         DateTime?
   approvedBy         String?
-  revision           Int            @default(0)
+  revision           Int                @default(0)
+  accountingMapping  Json?
   exports            AccountingExport[]
   costChanges        CostChange[]
-  createdAt          DateTime       @default(now())
-  updatedAt          DateTime       @updatedAt
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
   items              InvoiceItem[]
+
   @@unique([shop, documentHash])
   @@unique([shop, identityKey])
   @@index([shop, createdAt])
@@ -143,40 +145,47 @@ model InvoiceItem {
 }
 
 model ShopSettings {
-  id                  String   @id @default(uuid())
-  shop                String   @unique
-  billingPlan         String   @default("STARTER")
-  accountingPlatform  String?
-  accountingConnected Boolean  @default(false)
-  autoSyncCogs        Boolean  @default(false)
-  requireReview       Boolean  @default(true)
-  defaultCurrency     String   @default("USD")
-  dateOrder           String   @default("DMY")
-  xeroAccountCode     String?
-  xeroTaxType         String?
-  quickBooksAccountId String?
-  quickBooksTaxCodeId String?
-  inboundAlias        String?  @unique
-  minutesSavedPerInvoice Float @default(0)
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  id                     String   @id @default(uuid())
+  shop                   String   @unique
+  billingPlan            String   @default("STARTER")
+  accountingPlatform     String?
+  accountingConnected    Boolean  @default(false)
+  autoSyncCogs           Boolean  @default(false)
+  requireReview          Boolean  @default(true)
+  defaultCurrency        String   @default("USD")
+  dateOrder              String   @default("DMY")
+  xeroAccountCode        String?
+  xeroTaxType            String?
+  quickBooksAccountId    String?
+  quickBooksTaxCodeId    String?
+  quickBooksTaxAccountId String?
+  inboundAlias           String?  @unique
+  minutesSavedPerInvoice Float    @default(0)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
 }
 
 model AccountingExport {
-  id          String   @id @default(uuid())
-  shop        String
-  invoiceId   String
-  invoice     Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  platform    String
-  status      String   @default("PENDING")
-  requestKey  String   @unique @default(uuid())
-  remoteId    String?
-  payload     Json?
-  error       String?
-  attemptedAt DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id               String    @id @default(uuid())
+  shop             String
+  invoiceId        String
+  invoice          Invoice   @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  platform         String
+  status           String    @default("PENDING")
+  requestKey       String    @unique @default(uuid())
+  remoteId         String?
+  companyKey       String?
+  attachmentStatus String    @default("NOT_REQUESTED")
+  attachmentId     String?
+  attachmentError  String?
+  payload          Json?
+  error            String?
+  attemptedAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
   @@unique([invoiceId, platform])
+  @@unique([shop, platform, companyKey, remoteId])
   @@index([shop, status])
 }
 
@@ -196,6 +205,7 @@ model CostChange {
   error           String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+
   @@unique([invoiceId, invoiceItemId])
   @@index([shop, createdAt])
 }
@@ -208,6 +218,7 @@ model AuditEvent {
   action    String
   detail    Json?
   createdAt DateTime @default(now())
+
   @@index([shop, createdAt])
   @@index([invoiceId])
 }
@@ -220,33 +231,35 @@ model SupplierMapping {
   variantId String
   title     String
   updatedAt DateTime @updatedAt
+
   @@unique([shop, vendorKey, itemKey])
 }
 
 model GoodsReceipt {
-  id              String   @id @default(uuid())
+  id              String             @id @default(uuid())
   shop            String
   purchaseOrderId String
-  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  purchaseOrder   PurchaseOrder      @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
   reference       String?
-  requestKey      String   @unique
+  requestKey      String             @unique
   actor           String
-  receivedAt      DateTime @default(now())
+  receivedAt      DateTime           @default(now())
   items           GoodsReceiptItem[]
+
   @@index([shop, receivedAt])
 }
 
 model GoodsReceiptItem {
-  id                  String @id @default(uuid())
+  id                  String            @id @default(uuid())
   receiptId           String
-  receipt             GoodsReceipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
-  purchaseOrderItemId  String
-  purchaseOrderItem    PurchaseOrderItem @relation(fields: [purchaseOrderItemId], references: [id], onDelete: Cascade)
+  receipt             GoodsReceipt      @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  purchaseOrderItemId String
+  purchaseOrderItem   PurchaseOrderItem @relation(fields: [purchaseOrderItemId], references: [id], onDelete: Cascade)
   quantity            Float
 }
 
 model InvoiceJob {
-  id              String   @id @default(uuid())
+  id              String    @id @default(uuid())
   shop            String
   documentHash    String
   storageKey      String
@@ -254,41 +267,64 @@ model InvoiceJob {
   contentType     String
   vendorName      String?
   purchaseOrderId String?
-  status          String   @default("QUEUED")
-  pageCount       Int      @default(0)
-  attempts        Int      @default(0)
+  status          String    @default("QUEUED")
+  pageCount       Int       @default(0)
+  attempts        Int       @default(0)
   invoiceId       String?
   error           String?
-  availableAt     DateTime @default(now())
+  availableAt     DateTime  @default(now())
   lockedAt        DateTime?
   leaseToken      String?
   usageMonth      String
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
   @@unique([shop, documentHash])
   @@index([status, availableAt])
 }
 
 model MonthlyUsage {
-  id        String   @id @default(uuid())
-  shop      String
-  month     String
-  invoices  Int      @default(0)
+  id       String @id @default(uuid())
+  shop     String
+  month    String
+  invoices Int    @default(0)
+
   @@unique([shop, month])
 }
 
 model AccountingConnection {
-  id           String    @id @default(uuid())
-  shop         String
-  platform     String
-  accessToken  String
-  refreshToken String?
-  tenantId     String?
-  realmId      String?
-  scopes       String?
-  expiresAt    DateTime?
-  connectedAt  DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  id               String    @id @default(uuid())
+  shop             String
+  platform         String
+  accessToken      String
+  refreshToken     String?
+  tenantId         String?
+  realmId          String?
+  environment      String    @default("production")
+  companyName      String?
+  country          String?
+  homeCurrency     String?
+  xeroConnectionId String?
+  scopes           String?
+  expiresAt        DateTime?
+  connectedAt      DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   @@unique([shop, platform])
+}
+
+model AccountingAuthorization {
+  id          String   @id
+  shop        String
+  platform    String
+  environment String   @default("production")
+  actor       String
+  status      String   @default("CREATED")
+  cookieHash  String?
+  credentials String?
+  companies   Json?
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+
+  @@index([shop, expiresAt])
 }

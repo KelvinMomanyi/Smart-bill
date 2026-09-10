@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
   json,
-  redirect,
   type LoaderFunctionArgs,
   type ActionFunctionArgs,
 } from "@remix-run/node";
@@ -31,9 +30,14 @@ import {
 } from "../services/billing.server";
 import { PLANS, planFromName, TRIAL_DAYS } from "../utils/plans";
 import { validCurrency } from "../utils/invoiceRules";
-import { createAccountingState } from "../utils/accountingOAuth.server";
-import { getXeroAuthUrl } from "../utils/xero";
-import { getQuickBooksAuthUrl } from "../utils/quickbook";
+import { createAuthorization } from "../services/accountingAuthorization.server";
+import {
+  disconnectAccounting,
+  livePlatform,
+} from "../services/accountingConnection.server";
+import { getAccountingCatalog } from "../services/accountingCatalog.server";
+import { quickBooksEnvironment } from "../utils/quickbook";
+import { isUsCompany } from "../utils/accountingValidation";
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session, admin } = await requireAdmin(request);
   const [settings, subscription, used, connections, staff] = await Promise.all([
@@ -42,7 +46,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
     getUsage(session.shop),
     prisma.accountingConnection.findMany({
       where: { shop: session.shop },
-      select: { platform: true },
+      select: {
+        platform: true,
+        companyName: true,
+        tenantId: true,
+        realmId: true,
+        environment: true,
+      },
     }),
     prisma.session.findMany({
       where: { shop: session.shop, isOnline: true },
@@ -55,11 +65,45 @@ export async function loader({ request }: LoaderFunctionArgs) {
       },
     }),
   ]);
+  const catalogs = await Promise.all(
+    connections.map(async (connection) => {
+      try {
+        return {
+          platform: connection.platform,
+          catalog: await getAccountingCatalog(
+            session.shop,
+            livePlatform(connection.platform),
+          ),
+          error: null,
+        };
+      } catch (error) {
+        return {
+          platform: connection.platform,
+          catalog: null,
+          error:
+            error instanceof Error ? error.message : "Connection check failed.",
+        };
+      }
+    }),
+  );
   return json({
     settings,
     subscription,
     used,
     connections,
+    catalogs,
+    quickBooksEnvironment: quickBooksEnvironment(),
+    accountingConfigured: {
+      XERO: Boolean(
+        process.env.XERO_CLIENT_ID && process.env.XERO_CLIENT_SECRET,
+      ),
+      QUICKBOOKS: Boolean(
+        (process.env.QB_CLIENT_ID && process.env.QB_CLIENT_SECRET) ||
+          (process.env.QB_ENVIRONMENT === "sandbox" &&
+            process.env.QB_SANDBOX_CLIENT_ID &&
+            process.env.QB_SANDBOX_CLIENT_SECRET),
+      ),
+    },
     staff,
     owner: session.onlineAccessInfo?.associated_user.account_owner === true,
     inboxDomain: process.env.INBOUND_EMAIL_DOMAIN || "",
@@ -69,7 +113,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
   });
 }
 export async function action({ request }: ActionFunctionArgs) {
-  const { session, billing, actor } = await requireAdmin(request);
+  const {
+    session,
+    billing,
+    actor,
+    redirect: shopifyRedirect,
+  } = await requireAdmin(request);
   const form = await request.formData();
   const intent = String(form.get("intent") || "");
   try {
@@ -104,8 +153,40 @@ export async function action({ request }: ActionFunctionArgs) {
           String(form.get("quickBooksAccountId") || "").trim() || null,
         quickBooksTaxCodeId:
           String(form.get("quickBooksTaxCodeId") || "").trim() || null,
+        quickBooksTaxAccountId:
+          String(form.get("quickBooksTaxAccountId") || "").trim() || null,
         minutesSavedPerInvoice: minutes,
       };
+      const linked = await prisma.accountingConnection.findMany({
+        where: { shop: session.shop },
+        select: { platform: true },
+      });
+      for (const link of linked) {
+        const platform = livePlatform(link.platform);
+        const catalog = await getAccountingCatalog(session.shop, platform);
+        const account =
+          platform === "XERO" ? data.xeroAccountCode : data.quickBooksAccountId;
+        const tax =
+          platform === "XERO" ? data.xeroTaxType : data.quickBooksTaxCodeId;
+        if (account && !catalog.accounts.some((a) => a.id === account))
+          throw new Error(
+            "Choose an active purchase account from the connected company.",
+          );
+        if (tax && !catalog.taxes.some((t) => t.id === tax))
+          throw new Error(
+            "Choose a purchase tax code from the connected company.",
+          );
+        if (
+          platform === "QUICKBOOKS" &&
+          data.quickBooksTaxAccountId &&
+          !catalog.accounts.some(
+            (a) => a.id === data.quickBooksTaxAccountId && a.type === "EXPENSE",
+          )
+        )
+          throw new Error(
+            "Choose an expense account for non-recoverable US purchase sales tax.",
+          );
+      }
       await prisma.shopSettings.update({ where: { shop: session.shop }, data });
       await prisma.auditEvent.create({
         data: { shop: session.shop, actor, action: "SETTINGS_UPDATED" },
@@ -149,36 +230,20 @@ export async function action({ request }: ActionFunctionArgs) {
       });
     } else if (intent === "connect-accounting") {
       await requireSubscription(request);
-      const base =
-        process.env.SHOPIFY_APP_URL?.replace(/\/$/, "") ||
-        new URL(request.url).origin;
-      const platform = String(form.get("platform"));
-      if (platform === "XERO")
-        return redirect(
-          await getXeroAuthUrl(
-            `${base}/accounting/xero/callback`,
-            createAccountingState(session.shop, "XERO"),
-          ),
-        );
-      if (platform === "QUICKBOOKS")
-        return redirect(
-          await getQuickBooksAuthUrl(
-            `${base}/accounting/quickbooks/callback`,
-            createAccountingState(session.shop, "QUICKBOOKS"),
-          ),
-        );
-      throw new Error("Unknown accounting platform.");
+      return shopifyRedirect(
+        await createAuthorization(
+          session.shop,
+          livePlatform(String(form.get("platform"))),
+          actor,
+        ),
+        { target: "_top" },
+      );
     } else if (intent === "disconnect-accounting") {
-      await prisma.accountingConnection.deleteMany({
-        where: { shop: session.shop, platform: String(form.get("platform")) },
-      });
-      const remaining = await prisma.accountingConnection.count({
-        where: { shop: session.shop },
-      });
-      await prisma.shopSettings.update({
-        where: { shop: session.shop },
-        data: { accountingConnected: remaining > 0 },
-      });
+      await disconnectAccounting(
+        session.shop,
+        livePlatform(String(form.get("platform"))),
+        actor,
+      );
     } else throw new Error("Unknown action.");
     return json({ success: true as const, message: "Settings saved." });
   } catch (error) {
@@ -201,6 +266,9 @@ export default function Settings() {
     subscription,
     used,
     connections,
+    catalogs,
+    accountingConfigured,
+    quickBooksEnvironment,
     owner,
     staff,
     inboxReady,
@@ -208,6 +276,8 @@ export default function Settings() {
   } = useLoaderData<typeof loader>();
   const result = useActionData<typeof action>();
   const busy = useNavigation().state !== "idle";
+  const xero = catalogs.find((c) => c.platform === "XERO")?.catalog;
+  const quickbooks = catalogs.find((c) => c.platform === "QUICKBOOKS")?.catalog;
   return (
     <Page
       title="Settings and plans"
@@ -291,39 +361,52 @@ export default function Settings() {
                   <option value="MDY">Month / day / year</option>
                 </select>
               </label>
-              <label>
-                Xero purchase account code{" "}
-                <input
-                  name="xeroAccountCode"
-                  defaultValue={settings.xeroAccountCode || ""}
-                />
-              </label>
-              <label>
-                Xero purchase tax type{" "}
-                <input
-                  name="xeroTaxType"
-                  placeholder="Use the tax type from your Xero organisation"
-                  defaultValue={settings.xeroTaxType || ""}
-                />
-              </label>
-              <label>
-                QuickBooks expense account ID{" "}
-                <input
-                  name="quickBooksAccountId"
-                  defaultValue={settings.quickBooksAccountId || ""}
-                />
-              </label>
-              <label>
-                QuickBooks tax code ID{" "}
-                <input
+              <AccountChoice
+                name="xeroAccountCode"
+                label="Xero purchase account"
+                value={settings.xeroAccountCode}
+                options={xero?.accounts}
+              />
+              <AccountChoice
+                name="xeroTaxType"
+                label="Xero default purchase tax"
+                value={settings.xeroTaxType}
+                options={xero?.taxes}
+              />
+              <AccountChoice
+                name="quickBooksAccountId"
+                label="QuickBooks purchase account"
+                value={settings.quickBooksAccountId}
+                options={quickbooks?.accounts}
+              />
+              {(!quickbooks || !isUsCompany(quickbooks.country)) && (
+                <AccountChoice
                   name="quickBooksTaxCodeId"
-                  defaultValue={settings.quickBooksTaxCodeId || ""}
+                  label="QuickBooks default purchase tax"
+                  value={settings.quickBooksTaxCodeId}
+                  options={quickbooks?.taxes}
                 />
-              </label>
+              )}
+              {quickbooks && isUsCompany(quickbooks.country) && (
+                <>
+                  <AccountChoice
+                    name="quickBooksTaxAccountId"
+                    label="US purchase sales-tax expense account"
+                    value={settings.quickBooksTaxAccountId}
+                    options={quickbooks.accounts.filter(
+                      (a) => a.type === "EXPENSE",
+                    )}
+                  />
+                  <Text as="p" tone="subdued">
+                    US QuickBooks records purchase sales tax as a separate,
+                    non-recoverable expense using this account.
+                  </Text>
+                </>
+              )}
               <Text as="p" tone="subdued">
-                Live QuickBooks export currently supports untaxed bills. Use the
-                reviewed CSV for bills with purchase tax. Product cost sync
-                requires the invoice and Shopify store currencies to match.
+                Choices come from your connected company. Use Accounting details
+                on an invoice to choose different accounts or taxes per line and
+                enter an exchange rate. Enter net line amounts and separate tax.
               </Text>
               <label>
                 Measured minutes saved per approved invoice{" "}
@@ -352,26 +435,66 @@ export default function Settings() {
               Accounting connections
             </Text>
             <InlineStack gap="300">
-              {["XERO", "QUICKBOOKS"].map((platform) => {
-                const connected = connections.some(
+              {(["XERO", "QUICKBOOKS"] as const).map((platform) => {
+                const connection = connections.find(
                   (c) => c.platform === platform,
                 );
+                const connected = Boolean(connection);
+                const health = catalogs.find((c) => c.platform === platform);
                 return (
-                  <Form method="post" key={platform}>
-                    <input
-                      type="hidden"
-                      name="intent"
-                      value={
-                        connected
-                          ? "disconnect-accounting"
-                          : "connect-accounting"
-                      }
-                    />
-                    <input type="hidden" name="platform" value={platform} />
-                    <Button submit loading={busy}>
-                      {connected ? "Disconnect" : "Connect"} {platform}
-                    </Button>
-                  </Form>
+                  <BlockStack gap="200" key={platform}>
+                    <Text as="p">
+                      {platform}:{" "}
+                      {connection
+                        ? connection.companyName ||
+                          connection.tenantId ||
+                          connection.realmId
+                        : "Not connected"}
+                      {platform === "QUICKBOOKS"
+                        ? ` (${connection?.environment || quickBooksEnvironment})`
+                        : ""}
+                    </Text>
+                    {health?.error && (
+                      <Banner tone="warning">
+                        {health.error} Reconnect if permissions have changed.
+                      </Banner>
+                    )}
+                    {!accountingConfigured[platform] && (
+                      <Text as="p" tone="subdued">
+                        The app operator must configure this provider&apos;s
+                        credentials before connection.
+                      </Text>
+                    )}
+                    <Form method="post">
+                      <input
+                        type="hidden"
+                        name="intent"
+                        value="connect-accounting"
+                      />
+                      <input type="hidden" name="platform" value={platform} />
+                      <Button
+                        submit
+                        loading={busy}
+                        disabled={!accountingConfigured[platform]}
+                      >
+                        {connected ? "Reconnect / change company" : "Connect"}{" "}
+                        {platform}
+                      </Button>
+                    </Form>
+                    {connected && (
+                      <Form method="post">
+                        <input
+                          type="hidden"
+                          name="intent"
+                          value="disconnect-accounting"
+                        />
+                        <input type="hidden" name="platform" value={platform} />
+                        <Button submit loading={busy}>
+                          Disconnect {platform}
+                        </Button>
+                      </Form>
+                    )}
+                  </BlockStack>
                 );
               })}
             </InlineStack>
@@ -436,5 +559,33 @@ export default function Settings() {
         )}
       </BlockStack>
     </Page>
+  );
+}
+function AccountChoice({
+  name,
+  label,
+  value,
+  options,
+}: {
+  name: string;
+  label: string;
+  value: string | null;
+  options?: { id: string; name: string }[];
+}) {
+  return (
+    <label>
+      {label}{" "}
+      <select name={name} defaultValue={value || ""}>
+        <option value="">Choose after connecting</option>
+        {value && !options?.some((o) => o.id === value) && (
+          <option value={value}>{value} — verify selection</option>
+        )}
+        {options?.map((option) => (
+          <option key={option.id} value={option.id}>
+            {option.name} ({option.id})
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }

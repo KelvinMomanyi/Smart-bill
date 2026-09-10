@@ -31,6 +31,7 @@ export async function eraseShopData(shop: string) {
     prisma.purchaseOrder.deleteMany({ where: { shop } }),
     prisma.vendor.deleteMany({ where: { shop } }),
     prisma.accountingConnection.deleteMany({ where: { shop } }),
+    prisma.accountingAuthorization.deleteMany({ where: { shop } }),
     prisma.monthlyUsage.deleteMany({ where: { shop } }),
     prisma.shopSettings.deleteMany({ where: { shop } }),
     prisma.session.deleteMany({ where: { shop } }),

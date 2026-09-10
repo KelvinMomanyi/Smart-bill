@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual, randomUUID } from "node:crypto";
 
 export type AccountingPlatform = "XERO" | "QUICKBOOKS";
 
@@ -6,6 +6,7 @@ type AccountingOAuthState = {
   shop: string;
   platform: AccountingPlatform;
   issuedAt: number;
+  nonce: string;
 };
 
 function stateSecret() {
@@ -32,8 +33,9 @@ function signaturesMatch(left: string, right: string) {
 export function createAccountingState(
   shop: string,
   platform: AccountingPlatform,
+  nonce = randomUUID(),
 ) {
-  const payload = { shop, platform, issuedAt: Date.now() };
+  const payload = { shop, platform, issuedAt: Date.now(), nonce };
   return Buffer.from(
     JSON.stringify({ payload, signature: signatureFor(payload) }),
     "utf8",
@@ -59,7 +61,9 @@ export function readAccountingState(value?: string | null) {
 
   if (
     !/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(payload.shop) ||
-    !["XERO", "QUICKBOOKS"].includes(payload.platform)
+    !["XERO", "QUICKBOOKS"].includes(payload.platform) ||
+    typeof payload.nonce !== "string" ||
+    !/^[a-zA-Z0-9-]{20,80}$/.test(payload.nonce)
   ) {
     throw new Error("Invalid accounting OAuth state");
   }

@@ -1,4 +1,5 @@
 import prisma from "../db.server";
+import { Prisma } from "@prisma/client";
 import { requireAdmin } from "../utils/rbac.server";
 import { requireSubscription } from "./billing.server";
 import { invoiceIdentity } from "./invoiceWorkflow.server";
@@ -148,7 +149,9 @@ export async function saveInvoiceReview(
         "This invoice changed in another tab. Reload before saving.",
       );
     if (
-      before.exports.some((e) => e.platform !== "CSV") ||
+      before.exports.some(
+        (e) => e.platform !== "CSV" && e.status !== "REJECTED",
+      ) ||
       before.costChanges.some((c) => c.status !== "PLANNED")
     )
       throw new Error(
@@ -181,6 +184,7 @@ export async function saveInvoiceReview(
         reviewStatus: issues.length ? "NEEDS_ATTENTION" : "PENDING_REVIEW",
         discrepancySummary: issues.join("\n") || null,
         revision: { increment: 1 },
+        accountingMapping: Prisma.DbNull,
         cogsSyncStatus: "NOT_REQUESTED",
         items: {
           create: items.map((item) => {

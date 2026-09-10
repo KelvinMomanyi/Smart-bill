@@ -8,9 +8,9 @@ const invoice = {
   date: new Date("2026-06-10T12:00:00.000Z"),
   dueDate: new Date("2026-07-10T12:00:00.000Z"),
   currency: "USD",
-  subtotal: 72,
-  tax: 7.2,
-  total: 79.2,
+  subtotal: 54,
+  tax: 5.4,
+  total: 59.4,
   vendor: { name: "Acme Packaging" },
   purchaseOrder: { poNumber: "PO-44" },
   items: [
@@ -27,16 +27,16 @@ const invoice = {
 test("formatForPlatform creates Xero accounts payable invoice payloads", () => {
   const payload = formatForPlatform(invoice, "XERO", {
     xeroAccountCode: "500",
-    xeroTaxType: "NONE",
+    xeroTaxType: "INPUT",
   });
 
   assert.equal(payload.Type, "ACCPAY");
   assert.equal(payload.Contact.Name, "Acme Packaging");
   assert.equal(payload.Reference, "PO-44");
-  assert.equal(payload.DateString, "2026-06-10");
+  assert.equal(payload.Date, "2026-06-10");
   assert.equal(payload.LineItems[0].UnitAmount, 4.5);
   assert.equal(payload.LineItems[0].AccountCode, "500");
-  assert.equal(payload.LineItems[0].TaxType, "NONE");
+  assert.equal(payload.LineItems[0].TaxType, "INPUT");
 });
 
 test("formatForPlatform creates QuickBooks bill payloads", () => {

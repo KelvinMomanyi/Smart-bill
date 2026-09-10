@@ -55,7 +55,7 @@ npm run lint
 npm run build:check
 ```
 
-The automated tests cover parsing, fractional quantities, date order, total validation, approval/currency rules, PO ambiguity, pricing boundaries, tax allocation, CSV escaping and upload validation. They do not contact Shopify, Xero or QuickBooks, or prove production database concurrency.
+The automated tests cover parsing, invoice controls, pricing, CSV/upload validation and accounting workflows, including OAuth callbacks, company confirmation, taxed bills, token refresh, duplicate/concurrent exports, recovery and attachments. Accounting workflow tests use mocked APIs and a serialized database adapter with dummy credentials. They do not contact Shopify, Xero or QuickBooks, or prove production database concurrency.
 
 ## Deployment
 
@@ -82,7 +82,7 @@ Register these callback URLs with your accounting OAuth applications:
 - `https://YOUR_APP/accounting/xero/callback`
 - `https://YOUR_APP/accounting/quickbooks/callback`
 
-Set the Xero/QuickBooks client credentials in the environment, then connect the organisation from Settings. Enter its actual purchase/expense account and tax mapping there. Xero exports validate the returned total. QuickBooks live export currently supports untaxed bills; use reviewed CSV for taxed bills. Currency conversion, mixed line tax treatments and credit notes are not automated. Provider verification can resolve a bill that already exists; an attempt that provably created no bill still requires operator investigation before resetting its export record.
+Set the Xero/QuickBooks credentials in the environment, connect from Settings and explicitly confirm the company. Select accounts and purchase taxes from provider-backed choices. Invoice Accounting details supports mixed line taxes and reviewed foreign exchange rates. QuickBooks supports international purchase-tax bills and an explicitly selected expense account for US non-recoverable purchase sales tax. Xero creates draft purchase bills; QuickBooks creates unpaid bills. Both support original-document attachments, provider-side disconnect, confirmed-rejection retries and verification of uncertain outcomes. See [Accounting integrations](ACCOUNTING_INTEGRATIONS.md) for configuration, supported scope and live acceptance steps.
 
 For Growth email capture, configure a Postmark-compatible inbound webhook to `/api/inbound-email` using HTTP Basic username `smartbill` and password `INBOUND_EMAIL_SECRET`. Set `INBOUND_EMAIL_DOMAIN` to the receiving domain and route mail for generated aliases to that webhook. Enable the store's inbox from Settings. Only authenticated webhook requests for a single known store are accepted; document hashes deduplicate provider retries. Inbound email is not active until the mail provider and receiving domain are configured.
 

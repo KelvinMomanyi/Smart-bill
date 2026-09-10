@@ -41,6 +41,8 @@ import {
 } from "../services/accountingExport.server";
 import { formatMoney } from "../utils/format";
 import type { loader as productLoader } from "./api.products";
+import { attachInvoiceDocument } from "../services/accountingAttachment.server";
+import { livePlatform } from "../services/accountingConnection.server";
 export async function loader({ request, params }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const invoice = await prisma.invoice.findFirst({
@@ -113,6 +115,12 @@ export async function action({ request, params }: ActionFunctionArgs) {
         request,
         id,
         intent === "export-xero" ? "XERO" : "QUICKBOOKS",
+      );
+    else if (intent === "attach-document")
+      await attachInvoiceDocument(
+        request,
+        id,
+        livePlatform(String(form.get("platform"))),
       );
     else throw new Error("Unknown invoice action.");
     return json({ success: true as const, message: "Invoice updated." });
@@ -303,7 +311,9 @@ function InvoiceEditor({
   const locked =
     invoice.accountingStatus === "EXPORTED" ||
     invoice.cogsSyncStatus === "SYNCED" ||
-    invoice.exports.some((e) => e.platform !== "CSV") ||
+    invoice.exports.some(
+      (e) => e.platform !== "CSV" && e.status !== "REJECTED",
+    ) ||
     invoice.costChanges.some((c) => c.status !== "PLANNED");
   const update = (index: number, change: Partial<EditorItem>) => {
     setDirty(true);
@@ -652,6 +662,18 @@ function InvoiceEditor({
                 invoice shown above.
               </Text>
               <InlineStack gap="300">
+                <Button
+                  url={`/app/invoices/${invoice.id}/accounting?platform=XERO`}
+                  disabled={dirty}
+                >
+                  Xero accounting details
+                </Button>
+                <Button
+                  url={`/app/invoices/${invoice.id}/accounting?platform=QUICKBOOKS`}
+                  disabled={dirty}
+                >
+                  QuickBooks accounting details
+                </Button>
                 {[
                   ["preview-costs", "Preview Shopify costs"],
                   ["sync-costs", "Apply previewed costs"],
@@ -752,6 +774,50 @@ function InvoiceEditor({
                       {e.error}
                     </Text>
                   )}
+                  {e.companyKey && (
+                    <Text as="p" tone="subdued">
+                      Company: {e.companyKey}
+                    </Text>
+                  )}
+                  {e.status === "REJECTED" && (
+                    <Text as="p">
+                      No bill was created. Correct the reported issue, then use
+                      Export above to retry.
+                    </Text>
+                  )}
+                  {role === "ADMIN" &&
+                    e.status === "EXPORTED" &&
+                    invoice.storageKey && (
+                      <Form method="post">
+                        <input
+                          type="hidden"
+                          name="intent"
+                          value="attach-document"
+                        />
+                        <input
+                          type="hidden"
+                          name="platform"
+                          value={e.platform}
+                        />
+                        <Text as="p">
+                          Original document: {e.attachmentStatus}
+                        </Text>
+                        {e.attachmentError && (
+                          <Text as="p" tone="critical">
+                            {e.attachmentError}
+                          </Text>
+                        )}
+                        <Button
+                          submit
+                          loading={busy}
+                          disabled={e.attachmentStatus === "ATTACHED"}
+                        >
+                          {["VERIFY", "SENDING"].includes(e.attachmentStatus)
+                            ? "Check attachment"
+                            : "Attach original document to bill"}
+                        </Button>
+                      </Form>
+                    )}
                   {role === "ADMIN" &&
                     ["VERIFY", "SENDING"].includes(e.status) && (
                       <Form method="post">
@@ -770,16 +836,15 @@ function InvoiceEditor({
                           <input
                             name="remoteId"
                             defaultValue={e.remoteId || ""}
-                            required
                           />
                         </label>
                         <Text as="p" tone="subdued">
-                          Find the existing bill in your accounting system.
-                          Verification checks its supplier, number, currency and
-                          total without creating another bill.
+                          Leave the bill ID blank to search the connected
+                          company, or enter the existing bill ID. Verification
+                          checks its supplier, dates, currency and amounts.
                         </Text>
                         <Button submit loading={busy}>
-                          Verify existing bill
+                          Find / verify existing bill
                         </Button>
                       </Form>
                     )}

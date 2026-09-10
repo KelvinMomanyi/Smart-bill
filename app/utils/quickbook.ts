@@ -1,228 +1,154 @@
-const QUICKBOOKS_API_BASE_URL = "https://quickbooks.api.intuit.com/v3/company";
-const QUICKBOOKS_MINOR_VERSION = "75";
-
-type QuickBooksConnection = {
+import { accountingRequest } from "./accountingHttp.server";
+export type QuickBooksConnection = {
   accessToken: string;
   realmId?: string | null;
+  environment?: string | null;
 };
-
-export type QuickBooksRef = {
-  value: string;
-  name?: string;
-};
-
-function requiredEnv(name: string) {
-  const value = process.env[name]?.trim();
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
+export type QuickBooksRef = { value: string; name?: string };
+export function quickBooksEnvironment() {
+  const value = process.env.QB_ENVIRONMENT?.trim() || "production";
+  if (!["sandbox", "production"].includes(value))
+    throw new Error("QB_ENVIRONMENT must be sandbox or production.");
   return value;
 }
-
-function requireRealmId(connection: QuickBooksConnection) {
-  if (!connection.realmId) throw new Error("QuickBooks realmId is missing");
-  return connection.realmId;
+function credentials(environment = quickBooksEnvironment()) {
+  const prefix =
+    environment === "sandbox" && process.env.QB_SANDBOX_CLIENT_ID
+      ? "QB_SANDBOX"
+      : "QB";
+  const id = process.env[`${prefix}_CLIENT_ID`]?.trim();
+  const secret = process.env[`${prefix}_CLIENT_SECRET`]?.trim();
+  if (!id || !secret)
+    throw new Error(
+      `Configure ${prefix}_CLIENT_ID and ${prefix}_CLIENT_SECRET before connecting QuickBooks.`,
+    );
+  return { id, basic: Buffer.from(`${id}:${secret}`).toString("base64") };
 }
-
-async function readErrorBody(response: Response) {
-  const text = await response.text();
-  return text.slice(0, 500);
-}
-
-function quickBooksUrl(connection: QuickBooksConnection, path: string) {
-  const url = new URL(
-    `${QUICKBOOKS_API_BASE_URL}/${requireRealmId(connection)}${path}`,
-  );
-  url.searchParams.set("minorversion", QUICKBOOKS_MINOR_VERSION);
+export function quickBooksUrl(connection: QuickBooksConnection, path: string) {
+  if (!connection.realmId || !/^\d+$/.test(connection.realmId))
+    throw new Error("QuickBooks company ID is missing or invalid.");
+  const env = connection.environment || "production";
+  if (!["sandbox", "production"].includes(env))
+    throw new Error("Unknown QuickBooks environment.");
+  const origin =
+    env === "sandbox"
+      ? "https://sandbox-quickbooks.api.intuit.com"
+      : "https://quickbooks.api.intuit.com";
+  const url = new URL(`${origin}/v3/company/${connection.realmId}${path}`);
+  url.searchParams.set("minorversion", "75");
   return url;
 }
-
-async function quickBooksRequest<T>(
+export function quickBooksRequest<T = any>(
   connection: QuickBooksConnection,
   path: string,
   init: RequestInit = {},
 ) {
-  const response = await fetch(quickBooksUrl(connection, path), {
+  return accountingRequest<T>("QuickBooks", quickBooksUrl(connection, path), {
     ...init,
     headers: {
       Authorization: `Bearer ${connection.accessToken}`,
       Accept: "application/json",
-      "Content-Type": "application/json",
-      ...(init.headers || {}),
+      ...(init.body instanceof FormData
+        ? {}
+        : { "Content-Type": "application/json" }),
+      ...init.headers,
     },
   });
-
-  if (!response.ok) {
-    throw new Error(
-      `QuickBooks request failed: ${response.status} ${await readErrorBody(response)}`,
-    );
-  }
-
-  return response.json() as Promise<T>;
 }
-
-function escapeQuickBooksQueryValue(value: string) {
+export function escapeQuickBooksQueryValue(value: string) {
   return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 }
-
-async function quickBooksQuery<T>(
+export async function quickBooksQuery<T = any>(
   connection: QuickBooksConnection,
   query: string,
-  responseKey: string,
-) {
-  const path = `/query?query=${encodeURIComponent(query)}`;
-  const response = await quickBooksRequest<Record<string, any>>(
+  key: string,
+): Promise<T[]> {
+  const response = await quickBooksRequest(
     connection,
-    path,
-    {
-      method: "GET",
-    },
+    `/query?query=${encodeURIComponent(query)}`,
   );
-
-  return (response.QueryResponse?.[responseKey] || []) as T[];
+  return response.QueryResponse?.[key] || [];
 }
-
-async function findQuickBooksVendor(
+export async function listQuickBooksEntity(
   connection: QuickBooksConnection,
-  displayName: string,
+  entity: "Account" | "TaxCode" | "TaxRate",
 ) {
-  const vendors = await quickBooksQuery<any>(
-    connection,
-    `select * from Vendor where DisplayName = '${escapeQuickBooksQueryValue(displayName)}'`,
-    "Vendor",
+  const all: any[] = [];
+  for (let start = 1; start <= 20001; start += 1000) {
+    const page = await quickBooksQuery(
+      connection,
+      `select * from ${entity} startposition ${start} maxresults 1000`,
+      entity,
+    );
+    all.push(...page);
+    if (page.length < 1000) return all.filter((item) => item.Active !== false);
+  }
+  throw new Error(
+    `Too many ${entity} records. Contact support to configure this company.`,
   );
-
-  return vendors[0];
 }
-
-async function createQuickBooksVendor(
-  connection: QuickBooksConnection,
-  displayName: string,
-) {
-  const response = await quickBooksRequest<{ Vendor: any }>(
-    connection,
-    "/vendor",
-    {
-      method: "POST",
-      body: JSON.stringify({
-        DisplayName: displayName,
-        CompanyName: displayName,
-      }),
-    },
-  );
-
-  return response.Vendor;
-}
-
 export async function getOrCreateQuickBooksVendorRef(
   connection: QuickBooksConnection,
   displayName: string,
+  currency?: string,
+  multiCurrency = false,
 ): Promise<QuickBooksRef> {
-  const name = displayName.trim() || "Unknown Vendor";
-  const vendor =
-    (await findQuickBooksVendor(connection, name)) ||
-    (await createQuickBooksVendor(connection, name));
-
-  if (!vendor?.Id) {
-    throw new Error(`QuickBooks did not return an id for vendor ${name}`);
+  const name = displayName.trim();
+  if (!name || name.length > 500)
+    throw new Error("Enter a supplier name between 1 and 500 characters.");
+  const query = `select * from Vendor where DisplayName = '${escapeQuickBooksQueryValue(name)}'`;
+  let vendors = await quickBooksQuery<any>(connection, query, "Vendor");
+  if (vendors.length > 1)
+    throw new Error("Multiple QuickBooks suppliers match this name.");
+  let vendor = vendors[0];
+  if (!vendor) {
+    try {
+      vendor = (
+        await quickBooksRequest(connection, "/vendor", {
+          method: "POST",
+          body: JSON.stringify({
+            DisplayName: name,
+            CompanyName: name,
+            ...(multiCurrency && currency
+              ? { CurrencyRef: { value: currency } }
+              : {}),
+          }),
+        })
+      ).Vendor;
+    } catch (error) {
+      // A concurrent invoice may have created the same vendor.
+      vendors = await quickBooksQuery<any>(connection, query, "Vendor");
+      if (!vendors.length) throw error;
+      vendor = vendors[0];
+    }
   }
-
-  return { value: String(vendor.Id), name: vendor.DisplayName || name };
-}
-
-async function findQuickBooksAccountByName(
-  connection: QuickBooksConnection,
-  name: string,
-) {
-  const accounts = await quickBooksQuery<any>(
-    connection,
-    `select * from Account where Name = '${escapeQuickBooksQueryValue(name)}' and Active = true`,
-    "Account",
-  );
-
-  return accounts[0];
-}
-
-async function listQuickBooksAccounts(connection: QuickBooksConnection) {
-  return quickBooksQuery<any>(
-    connection,
-    "select * from Account where Active = true",
-    "Account",
-  );
-}
-
-function quickBooksRefFromAccount(account: any): QuickBooksRef | null {
-  if (!account?.Id) return null;
-  return { value: String(account.Id), name: account.Name };
-}
-
-function chooseDefaultExpenseAccount(accounts: any[]) {
-  const preferredNames = [
-    "Cost of Goods Sold",
-    "Purchases",
-    "Supplies & Materials",
-    "Office Supplies",
-  ];
-  const preferredTypes = ["Cost of Goods Sold", "Expense", "Other Expense"];
-
-  return (
-    preferredNames
-      .map((name) => accounts.find((account) => account.Name === name))
-      .find(Boolean) ||
-    accounts.find((account) => preferredTypes.includes(account.AccountType))
-  );
-}
-
-export async function resolveQuickBooksExpenseAccountRef(
-  connection: QuickBooksConnection,
-): Promise<QuickBooksRef> {
-  const configuredId = process.env.QB_EXPENSE_ACCOUNT_ID?.trim();
-  const configuredName = process.env.QB_EXPENSE_ACCOUNT_NAME?.trim();
-
-  if (configuredId) {
-    return { value: configuredId, name: configuredName || undefined };
-  }
-
-  if (configuredName) {
-    const account = await findQuickBooksAccountByName(
-      connection,
-      configuredName,
-    );
-    const ref = quickBooksRefFromAccount(account);
-    if (ref) return ref;
-
+  if (!vendor?.Id || vendor.Active === false)
+    throw new Error("QuickBooks supplier is missing or inactive.");
+  if (
+    currency &&
+    vendor.CurrencyRef?.value &&
+    vendor.CurrencyRef.value !== currency
+  )
     throw new Error(
-      `QuickBooks account "${configuredName}" was not found. Set QB_EXPENSE_ACCOUNT_ID to the account id or use an active account name.`,
+      `This QuickBooks supplier uses ${vendor.CurrencyRef.value}. Use a supplier with the invoice currency ${currency}.`,
     );
-  }
-
-  const account = chooseDefaultExpenseAccount(
-    await listQuickBooksAccounts(connection),
-  );
-  const ref = quickBooksRefFromAccount(account);
-  if (ref) return ref;
-
-  throw new Error(
-    "No usable QuickBooks expense account was found. Set QB_EXPENSE_ACCOUNT_ID or QB_EXPENSE_ACCOUNT_NAME.",
-  );
+  return { value: String(vendor.Id), name: vendor.DisplayName };
 }
-
-export async function createQuickBooksBill(
+export function createQuickBooksBill(
   connection: QuickBooksConnection,
   payload: Record<string, unknown>,
   requestKey?: string,
 ) {
   return quickBooksRequest(
     connection,
-    requestKey ? `/bill?requestid=${encodeURIComponent(requestKey)}` : "/bill",
+    `/bill${requestKey ? `?requestid=${encodeURIComponent(requestKey)}` : ""}`,
     {
       method: "POST",
       body: JSON.stringify(payload),
     },
   );
 }
-
-export async function readQuickBooksBill(
+export function readQuickBooksBill(
   connection: QuickBooksConnection,
   id: string,
 ) {
@@ -231,73 +157,80 @@ export async function readQuickBooksBill(
     `/bill/${encodeURIComponent(id)}`,
   );
 }
-
+export function findQuickBooksBills(
+  connection: QuickBooksConnection,
+  number: string,
+) {
+  return quickBooksQuery<any>(
+    connection,
+    `select * from Bill where DocNumber = '${escapeQuickBooksQueryValue(number)}' maxresults 1000`,
+    "Bill",
+  );
+}
 export async function getQuickBooksAuthUrl(
   redirectUri: string,
-  state = "quickbooks-oauth",
+  state: string,
+  environment = quickBooksEnvironment(),
 ) {
   const url = new URL("https://appcenter.intuit.com/connect/oauth2");
-  url.searchParams.set("response_type", "code");
-  url.searchParams.set("client_id", requiredEnv("QB_CLIENT_ID"));
-  url.searchParams.set("redirect_uri", redirectUri);
-  url.searchParams.set("scope", "com.intuit.quickbooks.accounting");
-  url.searchParams.set("state", state);
+  url.search = new URLSearchParams({
+    response_type: "code",
+    client_id: credentials(environment).id,
+    redirect_uri: redirectUri,
+    scope: "com.intuit.quickbooks.accounting",
+    state,
+  }).toString();
   return url.toString();
 }
-
-export async function getQuickBooksToken(code: string, redirectUri: string) {
-  const credentials = Buffer.from(
-    `${requiredEnv("QB_CLIENT_ID")}:${requiredEnv("QB_CLIENT_SECRET")}`,
-  ).toString("base64");
-
-  const response = await fetch(
+async function tokenRequest(
+  parameters: Record<string, string>,
+  environment?: string,
+) {
+  return accountingRequest(
+    "QuickBooks",
     "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer",
     {
       method: "POST",
       headers: {
-        Authorization: `Basic ${credentials}`,
+        Authorization: `Basic ${credentials(environment).basic}`,
         Accept: "application/json",
         "Content-Type": "application/x-www-form-urlencoded",
       },
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
-        code,
-        redirect_uri: redirectUri,
-      }),
+      body: new URLSearchParams(parameters),
     },
   );
-
-  if (!response.ok) {
-    throw new Error(`QuickBooks token exchange failed: ${response.status}`);
-  }
-
-  return response.json();
 }
-
-export async function refreshQuickBooksToken(refreshToken: string) {
-  const credentials = Buffer.from(
-    `${requiredEnv("QB_CLIENT_ID")}:${requiredEnv("QB_CLIENT_SECRET")}`,
-  ).toString("base64");
-
-  const response = await fetch(
-    "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer",
+export function getQuickBooksToken(
+  code: string,
+  redirectUri: string,
+  environment?: string,
+) {
+  return tokenRequest(
+    { grant_type: "authorization_code", code, redirect_uri: redirectUri },
+    environment,
+  );
+}
+export function refreshQuickBooksToken(
+  refreshToken: string,
+  environment?: string,
+) {
+  return tokenRequest(
+    { grant_type: "refresh_token", refresh_token: refreshToken },
+    environment,
+  );
+}
+export function revokeQuickBooksToken(token: string, environment?: string) {
+  return accountingRequest(
+    "QuickBooks",
+    "https://developer.api.intuit.com/v2/oauth2/tokens/revoke",
     {
       method: "POST",
       headers: {
-        Authorization: `Basic ${credentials}`,
+        Authorization: `Basic ${credentials(environment).basic}`,
         Accept: "application/json",
-        "Content-Type": "application/x-www-form-urlencoded",
+        "Content-Type": "application/json",
       },
-      body: new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: refreshToken,
-      }),
+      body: JSON.stringify({ token }),
     },
   );
-
-  if (!response.ok) {
-    throw new Error(`QuickBooks token refresh failed: ${response.status}`);
-  }
-
-  return response.json();
 }

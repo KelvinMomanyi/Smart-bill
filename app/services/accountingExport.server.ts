@@ -1,7 +1,6 @@
+import { randomUUID } from "node:crypto";
 import prisma from "../db.server";
 import type { Prisma } from "@prisma/client";
-import { requireAdmin } from "../utils/rbac.server";
-import { requireSubscription } from "./billing.server";
 import {
   assertApproved,
   invoiceIssues,
@@ -11,192 +10,95 @@ import { lockInvoice } from "./invoiceLock.server";
 import {
   createQuickBooksBill,
   readQuickBooksBill,
+  findQuickBooksBills,
   getOrCreateQuickBooksVendorRef,
-  refreshQuickBooksToken,
 } from "../utils/quickbook";
-import { refreshXeroToken } from "../utils/xero";
-
+import {
+  createXeroBill,
+  findXeroBills,
+  getOrCreateXeroContact,
+  xeroRequest,
+} from "../utils/xero";
 import {
   formatForPlatform,
   type AccountingPlatform,
 } from "../utils/accountingFormat";
+import {
+  validateBillMapping,
+  type BillMapping,
+} from "../utils/accountingValidation";
+import { AccountingApiError } from "../utils/accountingHttp.server";
+import {
+  accountingCompanyKey,
+  getAccountingConnection,
+  type LivePlatform,
+} from "./accountingConnection.server";
+import { fetchAccountingCatalog } from "./accountingCatalog.server";
+import {
+  billMatchesInvoice,
+  assertExportCompany,
+  exportDisposition,
+} from "../utils/accountingExportPolicy";
 export { formatForPlatform } from "../utils/accountingFormat";
 export type { AccountingPlatform } from "../utils/accountingFormat";
-type ExportMode = "CSV_PACKAGE" | "LIVE_SYNC";
-
-async function readErrorBody(response: Response) {
-  const text = await response.text();
-  return text.slice(0, 500);
-}
-
-async function refreshConnectionIfNeeded(connection: any) {
-  const isExpired =
-    connection.expiresAt &&
-    new Date(connection.expiresAt).getTime() <= Date.now();
-
-  if (!isExpired || !connection.refreshToken) return connection;
-
-  const token =
-    connection.platform === "XERO"
-      ? await refreshXeroToken(connection.refreshToken)
-      : await refreshQuickBooksToken(connection.refreshToken);
-
-  return prisma.accountingConnection.update({
-    where: {
-      shop_platform: {
-        shop: connection.shop,
-        platform: connection.platform,
-      },
-    },
-    data: {
-      accessToken: token.access_token,
-      refreshToken: token.refresh_token || connection.refreshToken,
-      scopes: token.scope || connection.scopes,
-      expiresAt: token.expires_in
-        ? new Date(Date.now() + Math.max(0, token.expires_in - 60) * 1000)
-        : connection.expiresAt,
-    },
-  });
+async function authorizeAccounting(request: Request) {
+  const [{ requireAdmin }, { requireSubscription }] = await Promise.all([
+    import("../utils/rbac.server"),
+    import("./billing.server"),
+  ]);
+  const context = await requireAdmin(request);
+  await requireSubscription(request);
+  return context;
 }
 
 async function getInvoice(shop: string, invoiceId: string) {
   const invoice = await prisma.invoice.findFirst({
     where: { id: invoiceId, shop },
-    include: { vendor: true, items: true, purchaseOrder: true },
+    include: { vendor: true, items: true, purchaseOrder: true, exports: true },
   });
-
-  if (!invoice) throw new Error("Invoice not found");
+  if (!invoice) throw new Error("Invoice not found.");
   return invoice;
 }
-
 export async function getInvoiceAccountingPayload(
   shop: string,
   invoiceId: string,
   platform: AccountingPlatform,
 ) {
-  const invoice = await getInvoice(shop, invoiceId);
-
-  return formatForPlatform(invoice, platform);
+  return formatForPlatform(await getInvoice(shop, invoiceId), platform);
 }
-
-async function postToXero(connection: any, payload: any, requestKey: string) {
-  if (!connection.tenantId) throw new Error("Xero tenant is missing");
-
-  const response = await fetch("https://api.xero.com/api.xro/2.0/Invoices", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${connection.accessToken}`,
-      "xero-tenant-id": connection.tenantId,
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      "Idempotency-Key": requestKey,
-    },
-    body: JSON.stringify({ Invoices: [payload] }),
-  });
-
-  if (!response.ok) {
-    throw new Error(
-      `Xero export failed: ${response.status} ${await readErrorBody(response)}`,
-    );
-  }
-
-  return response.json();
-}
-
-async function postToQuickBooks(
-  connection: any,
-  payload: any,
-  requestKey: string,
-) {
-  return createQuickBooksBill(connection, payload, requestKey);
-}
-
-// Recovery only reads an existing bill. It never creates another remote document.
-export async function verifyAccountingExport(
-  request: Request,
+async function finishExport(
+  entryId: string,
+  shop: string,
   invoiceId: string,
-  platform: "XERO" | "QUICKBOOKS",
+  actor: string,
+  platform: LivePlatform,
   remoteId: string,
+  companyKey: string,
+  verified = false,
 ) {
-  const { session, actor } = await requireAdmin(request);
-  await requireSubscription(request);
-  if (!/^[a-zA-Z0-9-]{1,80}$/.test(remoteId))
-    throw new Error("Enter the existing bill ID from your accounting system.");
-  const invoice = await getInvoice(session.shop, invoiceId);
-  assertApproved(invoice);
-  const entry = await prisma.accountingExport.findFirst({
-    where: { shop: session.shop, invoiceId, platform },
-  });
-  if (!entry || !["VERIFY", "SENDING"].includes(entry.status))
-    throw new Error("There is no incomplete export to verify.");
-  if (entry.remoteId && entry.remoteId !== remoteId)
-    throw new Error(
-      "Verify the bill ID already recorded in this invoice's history.",
-    );
-  if (
-    entry.status === "SENDING" &&
-    entry.attemptedAt &&
-    Date.now() - entry.attemptedAt.getTime() < 120000
-  )
-    throw new Error(
-      "The export may still be running. Allow two minutes before checking its result.",
-    );
-  const stored = await prisma.accountingConnection.findUnique({
-    where: { shop_platform: { shop: session.shop, platform } },
-  });
-  if (!stored)
-    throw new Error(
-      "Reconnect the same accounting organisation before verifying its bill.",
-    );
-  const connection = await refreshConnectionIfNeeded(stored);
-  let bill: any;
-  if (platform === "XERO") {
-    if (!connection.tenantId) throw new Error("Xero tenant is missing.");
-    const response = await fetch(
-      `https://api.xero.com/api.xro/2.0/Invoices/${encodeURIComponent(remoteId)}`,
-      {
-        headers: {
-          Authorization: `Bearer ${connection.accessToken}`,
-          "xero-tenant-id": connection.tenantId,
-          Accept: "application/json",
-        },
-      },
-    );
-    if (!response.ok) throw new Error("Xero could not retrieve that bill.");
-    bill = (await response.json()).Invoices?.[0];
-  } else bill = (await readQuickBooksBill(connection, remoteId)).Bill;
-  const expected = entry.payload as any;
-  const matches =
-    platform === "XERO"
-      ? bill?.Type === "ACCPAY" &&
-        bill.InvoiceNumber === invoice.invoiceNumber &&
-        bill.CurrencyCode === invoice.currency &&
-        normalizedKey(bill.Contact?.Name || "") ===
-          normalizedKey(invoice.vendor?.name || "") &&
-        Math.abs(Number(bill.Total) - invoice.total) <= 0.011 &&
-        !["VOIDED", "DELETED"].includes(bill.Status)
-      : bill?.DocNumber === invoice.invoiceNumber &&
-        bill.CurrencyRef?.value === invoice.currency &&
-        String(bill.VendorRef?.value) === String(expected?.VendorRef?.value) &&
-        Math.abs(Number(bill.TotalAmt) - invoice.total) <= 0.011;
-  if (!matches)
-    throw new Error(
-      "That bill's supplier, number, currency or total does not match. Correct the existing bill in the accounting system, then verify it again.",
-    );
   await prisma.$transaction(async (tx) => {
-    await lockInvoice(tx, session.shop, invoiceId);
+    await lockInvoice(tx, shop, invoiceId);
+    const entry = await tx.accountingExport.findUniqueOrThrow({
+      where: { id: entryId },
+    });
+    assertExportCompany(entry.companyKey, companyKey);
+    if (entry.status === "EXPORTED") return;
     const other = await tx.accountingExport.findFirst({
       where: {
-        shop: session.shop,
+        shop,
         platform,
         remoteId,
+        companyKey,
         invoiceId: { not: invoiceId },
       },
     });
-    if (other) throw new Error("That bill is linked to a different invoice.");
+    if (other)
+      throw new Error(
+        "That bill is already linked to another SmartBill invoice.",
+      );
     await tx.accountingExport.update({
-      where: { id: entry.id },
-      data: { remoteId, status: "EXPORTED", error: null },
+      where: { id: entryId },
+      data: { remoteId, status: "EXPORTED", error: null, companyKey },
     });
     await tx.invoice.update({
       where: { id: invoiceId },
@@ -204,186 +106,384 @@ export async function verifyAccountingExport(
     });
     await tx.auditEvent.create({
       data: {
-        shop: session.shop,
+        shop,
         invoiceId,
         actor,
-        action: "ACCOUNTING_VERIFIED",
-        detail: { platform, remoteId },
+        action: verified ? "ACCOUNTING_VERIFIED" : "ACCOUNTING_EXPORTED",
+        detail: { platform, remoteId, companyKey },
       },
     });
   });
 }
-
+async function remoteCandidates(
+  connection: Awaited<ReturnType<typeof getAccountingConnection>>,
+  invoice: any,
+  payload: any,
+) {
+  const bills =
+    connection.platform === "XERO"
+      ? await findXeroBills(connection, invoice.invoiceNumber)
+      : await findQuickBooksBills(connection, invoice.invoiceNumber);
+  // A same-number bill from another supplier is a different document.
+  return bills.filter((bill: any) =>
+    connection.platform === "XERO"
+      ? bill.Type === "ACCPAY" &&
+        !["VOIDED", "DELETED"].includes(bill.Status) &&
+        (bill.Contact?.ContactID === payload.Contact?.ContactID ||
+          normalizedKey(bill.Contact?.Name || "") ===
+            normalizedKey(invoice.vendor?.name || ""))
+      : String(bill.VendorRef?.value) === String(payload.VendorRef?.value),
+  );
+}
 export async function exportInvoiceToAccounting(
   request: Request,
   invoiceId: string,
   platform: AccountingPlatform,
 ) {
-  const { session, actor } = await requireAdmin(request);
-  await requireSubscription(request);
-  const shop = session.shop;
+  const { session, actor } = await authorizeAccounting(request);
+  return exportApprovedInvoice({
+    shop: session.shop,
+    actor,
+    invoiceId,
+    platform,
+  });
+}
+// Internal entry point: callers must authorize the shop and subscription first.
+export async function exportApprovedInvoice({
+  shop,
+  actor,
+  invoiceId,
+  platform,
+}: {
+  shop: string;
+  actor: string;
+  invoiceId: string;
+  platform: AccountingPlatform;
+}) {
   const invoice = await getInvoice(shop, invoiceId);
   assertApproved(invoice);
   const issues = invoiceIssues(invoice);
   if (issues.length) throw new Error(issues.join(" "));
-  const settings = await prisma.shopSettings.findUnique({ where: { shop } });
-  let payload = formatForPlatform(invoice, platform);
-  let mode: ExportMode = "CSV_PACKAGE";
-  let remoteResponse: unknown = null;
-
-  if (platform !== "CSV") {
-    if (
-      invoice.accountingStatus === "EXPORTED" &&
-      !(await prisma.accountingExport.count({ where: { shop, invoiceId } }))
-    )
-      throw new Error(
-        "This invoice was exported by an older version. Verify the existing bill in your accounting system; duplicate export is blocked.",
-      );
-    const storedConnection = await prisma.accountingConnection.findUnique({
+  if (platform === "CSV")
+    return {
+      success: true,
+      platform,
+      mode: "CSV_PACKAGE",
+      payload: formatForPlatform(invoice, platform),
+      remoteResponse: null,
+    };
+  const previous = invoice.exports.find((e) => e.platform === platform);
+  const disposition = exportDisposition(previous);
+  if (disposition === "DONE")
+    return {
+      success: true,
+      platform,
+      mode: "LIVE_SYNC",
+      payload: previous!.payload,
+      remoteResponse: { id: previous!.remoteId, alreadyExported: true },
+    };
+  if (invoice.accountingStatus === "EXPORTED" && !invoice.exports.length)
+    throw new Error(
+      "An older version exported this invoice. Check the original bill; creating another copy is blocked.",
+    );
+  const connection = await getAccountingConnection(shop, platform);
+  const companyKey = accountingCompanyKey(connection);
+  if (previous) assertExportCompany(previous.companyKey, companyKey);
+  const [settings, catalog] = await Promise.all([
+    prisma.shopSettings.findUnique({ where: { shop } }),
+    fetchAccountingCatalog(connection),
+  ]);
+  const mapping = (invoice.accountingMapping as any)?.[platform] as
+    | BillMapping
+    | undefined;
+  const validated = validateBillMapping(invoice, settings, catalog, mapping);
+  const payload =
+    platform === "XERO"
+      ? formatForPlatform(invoice, platform, {
+          validated,
+          xeroContactRef: await getOrCreateXeroContact(
+            connection,
+            invoice.vendor!.name,
+          ),
+        })
+      : formatForPlatform(invoice, platform, {
+          validated,
+          quickBooksMultiCurrency: catalog.multiCurrency,
+          quickBooksVendorRef: await getOrCreateQuickBooksVendorRef(
+            connection,
+            invoice.vendor!.name,
+            invoice.currency,
+            catalog.multiCurrency,
+          ),
+        });
+  const entry = await prisma.$transaction(async (tx) => {
+    const latest = await lockInvoice(tx, shop, invoiceId);
+    assertApproved(latest);
+    if (latest.revision !== invoice.revision)
+      throw new Error("Invoice changed during export preparation. Reload it.");
+    const current = await tx.accountingConnection.findUnique({
       where: { shop_platform: { shop, platform } },
     });
-
-    if (!storedConnection) {
-      throw new Error(`Connect ${platform} in Settings before live export.`);
-    }
-
-    const connection = await refreshConnectionIfNeeded(storedConnection);
-    if (platform === "XERO") {
-      if (!settings?.xeroAccountCode || !settings.xeroTaxType)
-        throw new Error(
-          "Set this store's Xero purchase account and tax type in Settings.",
-        );
-      if (
-        (invoice.tax || 0) > 0 &&
-        settings.xeroTaxType.toUpperCase() === "NONE"
-      )
-        throw new Error(
-          "Select a purchase tax type for this taxed invoice in Settings.",
-        );
-      payload = formatForPlatform(invoice, platform, {
-        xeroAccountCode: settings.xeroAccountCode,
-        xeroTaxType: settings.xeroTaxType,
-      });
-    }
-    if (platform === "QUICKBOOKS") {
-      if (!settings?.quickBooksAccountId)
-        throw new Error(
-          "Set this store's QuickBooks expense account ID in Settings.",
-        );
-      if ((invoice.tax || 0) > 0)
-        throw new Error(
-          "Taxed QuickBooks bills require company-specific purchase-tax setup. Download the reviewed CSV and enter this bill in QuickBooks; SmartBill will not guess its tax treatment.",
-        );
-      payload = formatForPlatform(invoice, platform, {
-        quickBooksVendorRef: await getOrCreateQuickBooksVendorRef(
-          connection,
-          invoice.vendor?.name || "Unknown Vendor",
-        ),
-        quickBooksExpenseAccountRef: { value: settings.quickBooksAccountId },
-        quickBooksTaxCodeId: settings.quickBooksTaxCodeId || undefined,
-      });
-    }
-
-    const entry = await prisma.$transaction(async (tx) => {
-      const latest = await lockInvoice(tx, shop, invoiceId);
-      assertApproved(latest);
-      if (latest.revision !== invoice.revision)
-        throw new Error(
-          "Invoice changed during export preparation. Reload it.",
-        );
-      const previous = latest.exports.find((e) => e.platform === platform);
-      if (previous?.remoteId) return previous;
-      if (previous)
-        throw new Error(
-          "An export was already attempted. Verify its status in the accounting system before another attempt; duplicate bill creation is blocked.",
-        );
-      return tx.accountingExport.create({
-        data: {
-          shop,
-          invoiceId,
-          platform,
-          status: "SENDING",
-          attemptedAt: new Date(),
-          payload: payload as unknown as Prisma.InputJsonValue,
-        },
-      });
-    });
-    if (entry.remoteId) {
-      if (entry.status !== "EXPORTED")
-        throw new Error(
-          "The existing remote bill needs verification. Review its total in your accounting system.",
-        );
-      return {
-        success: true,
-        platform,
-        mode: "LIVE_SYNC" as const,
-        payload: entry.payload,
-        remoteResponse: { id: entry.remoteId, alreadyExported: true },
-      };
-    }
-    try {
-      remoteResponse =
-        platform === "XERO"
-          ? await postToXero(connection, payload, entry.requestKey)
-          : await postToQuickBooks(connection, payload, entry.requestKey);
-      const response = remoteResponse as any;
-      const bill = platform === "XERO" ? response.Invoices?.[0] : response.Bill;
-      const remoteId = platform === "XERO" ? bill?.InvoiceID : bill?.Id;
-      if (!remoteId || bill?.HasErrors || bill?.ValidationErrors?.length)
-        throw new Error(
-          "The accounting provider did not confirm a valid bill.",
-        );
-      const remoteTotal = Number(
-        platform === "XERO" ? bill.Total : bill.TotalAmt,
-      );
-      const matches =
-        Number.isFinite(remoteTotal) &&
-        Math.abs(remoteTotal - invoice.total) <= 0.011;
+    if (!current || accountingCompanyKey(current) !== companyKey)
+      throw new Error("Accounting company changed. Reload the invoice.");
+    const previous = latest.exports.find((e) => e.platform === platform);
+    if (exportDisposition(previous) === "DONE") return previous!;
+    if (previous) assertExportCompany(previous.companyKey, companyKey);
+    const data = {
+      status: "SENDING",
+      attemptedAt: new Date(),
+      error: null,
+      companyKey,
+      requestKey: randomUUID(),
+      payload: payload as Prisma.InputJsonValue,
+    };
+    return previous
+      ? tx.accountingExport.update({ where: { id: previous.id }, data })
+      : tx.accountingExport.create({
+          data: { shop, invoiceId, platform, ...data },
+        });
+  });
+  if (entry.status === "EXPORTED")
+    return {
+      success: true,
+      platform,
+      mode: "LIVE_SYNC",
+      payload: entry.payload,
+      remoteResponse: { id: entry.remoteId, alreadyExported: true },
+    };
+  let submitted = false;
+  try {
+    const duplicates = await remoteCandidates(connection, invoice, payload);
+    if (duplicates.length) {
+      const id =
+        duplicates.length === 1
+          ? String(
+              platform === "XERO" ? duplicates[0].InvoiceID : duplicates[0].Id,
+            )
+          : null;
       await prisma.accountingExport.update({
         where: { id: entry.id },
         data: {
-          remoteId: String(remoteId),
-          status: matches ? "EXPORTED" : "VERIFY",
-          error: matches
-            ? null
-            : "The provider returned a different total. Review the remote bill; creating another copy is blocked.",
-        },
-      });
-      if (!matches)
-        throw new Error(
-          "The accounting provider returned a different total. Verify the existing remote bill.",
-        );
-      await prisma.auditEvent.create({
-        data: {
-          shop,
-          invoiceId,
-          actor,
-          action: "ACCOUNTING_EXPORTED",
-          detail: { platform, remoteId: String(remoteId) },
-        },
-      });
-    } catch (error) {
-      await prisma.accountingExport.updateMany({
-        where: { id: entry.id, status: "SENDING" },
-        data: {
           status: "VERIFY",
+          remoteId: id,
           error:
-            "Export outcome needs verification in the accounting system. Do not create a second bill.",
+            "An existing bill has this supplier and invoice number. Verify it to link the existing bill; no new bill was created.",
         },
       });
-      throw error;
+      throw new Error(
+        "A bill with this supplier and invoice number already exists. Use Verify existing bill in the export history.",
+      );
     }
-    mode = "LIVE_SYNC";
+    submitted = true;
+    const response =
+      platform === "XERO"
+        ? await createXeroBill(connection, payload, entry.requestKey)
+        : await createQuickBooksBill(connection, payload, entry.requestKey);
+    const bill = platform === "XERO" ? response.Invoices?.[0] : response.Bill;
+    const remoteId = platform === "XERO" ? bill?.InvoiceID : bill?.Id;
+    if (
+      !remoteId &&
+      (bill?.HasErrors ||
+        bill?.HasValidationErrors ||
+        bill?.ValidationErrors?.length)
+    ) {
+      const message = (bill.ValidationErrors || [])
+        .map((e: any) => e.Message)
+        .join(" ")
+        .slice(0, 600);
+      throw new AccountingApiError(
+        platform,
+        400,
+        message || "The accounting provider rejected this bill.",
+        true,
+      );
+    }
+    if (!remoteId)
+      throw new Error(
+        "The provider did not confirm a bill ID. Search for the bill in export history before trying again.",
+      );
+    // Save the remote ID even if later validation or local persistence fails.
+    await prisma.accountingExport.update({
+      where: { id: entry.id },
+      data: { remoteId: String(remoteId) },
+    });
+    if (
+      !billMatchesInvoice(
+        platform,
+        bill,
+        invoice,
+        payload,
+        catalog.homeCurrency,
+      )
+    )
+      throw new Error(
+        "The returned bill's supplier, dates, currency or amounts do not match. Verify the existing bill; creating another copy is blocked.",
+      );
+    await finishExport(
+      entry.id,
+      shop,
+      invoiceId,
+      actor,
+      platform,
+      String(remoteId),
+      companyKey,
+    );
+    return {
+      success: true,
+      platform,
+      mode: "LIVE_SYNC",
+      payload,
+      remoteResponse: { id: String(remoteId) },
+    };
+  } catch (error) {
+    const rejected =
+      !submitted || (error instanceof AccountingApiError && error.rejected);
+    await prisma.accountingExport.updateMany({
+      where: { id: entry.id, status: "SENDING", remoteId: null },
+      data: {
+        status: rejected ? "REJECTED" : "VERIFY",
+        error:
+          error instanceof Error
+            ? error.message
+            : "The bill export needs verification.",
+      },
+    });
+    await prisma.accountingExport.updateMany({
+      where: { id: entry.id, status: "SENDING", remoteId: { not: null } },
+      data: {
+        status: "VERIFY",
+        error:
+          error instanceof Error ? error.message : "Verify the recorded bill.",
+      },
+    });
+    throw error;
   }
-
-  await prisma.invoice.update({
-    where: { id: invoiceId },
-    data: {
-      accountingStatus:
-        platform === "CSV" ? invoice.accountingStatus : "EXPORTED",
-      status: platform === "CSV" ? "PENDING_SYNC" : "SYNCED",
-    },
+}
+export async function verifyAccountingExport(
+  request: Request,
+  invoiceId: string,
+  platform: LivePlatform,
+  remoteId: string,
+) {
+  const { session, actor } = await authorizeAccounting(request);
+  const invoice = await getInvoice(session.shop, invoiceId);
+  assertApproved(invoice);
+  const entry = invoice.exports.find((e) => e.platform === platform);
+  if (!entry || !["VERIFY", "SENDING"].includes(entry.status))
+    throw new Error("There is no incomplete export to verify.");
+  if (
+    entry.status === "SENDING" &&
+    entry.attemptedAt &&
+    Date.now() - entry.attemptedAt.getTime() < 120000
+  )
+    throw new Error(
+      "Allow two minutes for the running export to finish before verification.",
+    );
+  const connection = await getAccountingConnection(session.shop, platform);
+  const companyKey = accountingCompanyKey(connection);
+  assertExportCompany(entry.companyKey, companyKey);
+  const expected = entry.payload as any;
+  if (!remoteId) {
+    if (entry.remoteId) remoteId = entry.remoteId;
+    else {
+      const candidates = await remoteCandidates(connection, invoice, expected);
+      if (candidates.length !== 1)
+        throw new Error(
+          candidates.length
+            ? "Several bills match. Enter the correct bill ID to verify."
+            : "No bill was found yet. Check the accounting company and try again later. No second bill was created.",
+        );
+      remoteId = String(
+        platform === "XERO" ? candidates[0].InvoiceID : candidates[0].Id,
+      );
+    }
+  }
+  if (!/^[a-zA-Z0-9-]{1,80}$/.test(remoteId))
+    throw new Error("Enter a valid accounting bill ID.");
+  if (entry.remoteId && entry.remoteId !== remoteId)
+    throw new Error(
+      "Verify the bill ID already recorded in the export history.",
+    );
+  const bill =
+    platform === "XERO"
+      ? (
+          await xeroRequest(
+            connection,
+            `/Invoices/${encodeURIComponent(remoteId)}`,
+          )
+        ).Invoices?.[0]
+      : (await readQuickBooksBill(connection, remoteId)).Bill;
+  const catalog = await fetchAccountingCatalog(connection);
+  if (
+    !billMatchesInvoice(platform, bill, invoice, expected, catalog.homeCurrency)
+  )
+    throw new Error(
+      "This bill does not match the supplier, number, dates, currency and amounts of the approved invoice. Correct the existing bill in the accounting system, then verify it.",
+    );
+  await finishExport(
+    entry.id,
+    session.shop,
+    invoiceId,
+    actor,
+    platform,
+    remoteId,
+    companyKey,
+    true,
+  );
+}
+export async function saveInvoiceAccountingMapping(
+  request: Request,
+  invoiceId: string,
+  platform: LivePlatform,
+  form: FormData,
+) {
+  const { session, actor } = await authorizeAccounting(request);
+  const invoice = await getInvoice(session.shop, invoiceId);
+  const [settings, catalog] = await Promise.all([
+    prisma.shopSettings.findUnique({ where: { shop: session.shop } }),
+    fetchAccountingCatalog(
+      await getAccountingConnection(session.shop, platform),
+    ),
+  ]);
+  const mapping: BillMapping = {
+    companyKey: catalog.companyKey,
+    lines: invoice.items.map((item) => ({
+      itemId: item.id,
+      accountId: String(form.get(`account-${item.id}`) || ""),
+      taxCodeId: String(form.get(`tax-${item.id}`) || ""),
+    })),
+    ...(String(form.get("exchangeRate") || "").trim()
+      ? { exchangeRate: Number(form.get("exchangeRate")) }
+      : {}),
+  };
+  validateBillMapping(invoice, settings, catalog, mapping);
+  await prisma.$transaction(async (tx) => {
+    const latest = await lockInvoice(tx, session.shop, invoiceId);
+    if (latest.revision !== Number(form.get("revision")))
+      throw new Error("The invoice changed. Reload Accounting details.");
+    const previous = latest.exports.find((e) => e.platform === platform);
+    if (previous && previous.status !== "REJECTED")
+      throw new Error(
+        "This invoice already has an export in progress or completed. Its accounting choices are locked.",
+      );
+    await tx.invoice.update({
+      where: { id: invoiceId },
+      data: {
+        accountingMapping: {
+          ...((latest.accountingMapping as any) || {}),
+          [platform]: mapping,
+        },
+        revision: { increment: 1 },
+      },
+    });
+    await tx.auditEvent.create({
+      data: {
+        shop: session.shop,
+        invoiceId,
+        actor,
+        action: "ACCOUNTING_MAPPING_UPDATED",
+        detail: { platform, companyKey: catalog.companyKey },
+      },
+    });
   });
-
-  return { success: true, platform, mode, payload, remoteResponse };
 }
