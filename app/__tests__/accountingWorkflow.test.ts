@@ -629,7 +629,8 @@ for (const platform of ["XERO", "QUICKBOOKS"] as const) {
     const mock = mockWorkflow(t, platform);
     const params = { shop, actor: "owner", invoiceId: "invoice-1", platform };
     await exportApprovedInvoice(params);
-    mock.invoice.storageKey = "gs://test/invoices/test.pdf";
+    mock.invoice.storageKey =
+      "supabase://test/invoices/shop.myshopify.com/test.pdf";
     let uploads = 0;
     t.mock.method(globalThis, "fetch", async (input: any, init: any = {}) => {
       const url = new URL(String(input));

@@ -1,6 +1,6 @@
 import prisma from "../db.server";
 import { invoiceIssues } from "../utils/invoiceRules";
-import { matchPoLine } from "../utils/poMatching";
+import { matchPoLine, receiptStatus } from "../utils/poMatching";
 export { matchPoLine } from "../utils/poMatching";
 export async function reconcileInvoiceWithPO(
   invoiceId: string,
@@ -50,6 +50,10 @@ export async function refreshPurchaseOrder(
     }
     for (const row of po.items) {
       const quantity = billed.get(row.id) || 0;
+      if (row.receivedQty > row.expectedQty + 0.00001)
+        discrepancies.push(
+          `${row.name}: physically received ${row.receivedQty}, above the ordered quantity ${row.expectedQty}.`,
+        );
       if (quantity > row.expectedQty + 0.00001)
         discrepancies.push(
           `Billed quantity exceeds ordered quantity for ${row.name}.`,
@@ -63,16 +67,9 @@ export async function refreshPurchaseOrder(
         data: { billedQty: quantity },
       });
     }
-    const complete =
-      po.items.length > 0 &&
-      po.items.every((i) => i.receivedQty >= i.expectedQty);
     const status = discrepancies.length
       ? "MISMATCH"
-      : complete
-        ? "FULFILLED"
-        : po.items.some((i) => i.receivedQty > 0)
-          ? "PARTIAL"
-          : "OPEN";
+      : receiptStatus(po.items);
     await tx.purchaseOrder.update({ where: { id: po.id }, data: { status } });
     for (const bill of po.linkedInvoices) {
       const issues = [...invoiceIssues(bill), ...discrepancies];

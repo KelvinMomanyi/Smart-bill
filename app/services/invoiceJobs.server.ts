@@ -14,6 +14,10 @@ import {
 } from "./billing.server";
 import { persistCapturedInvoice } from "./invoiceWorkflow.server";
 import type { PlanKey } from "../utils/plans";
+import {
+  queuedInvoiceJobWhere,
+  staleInvoiceJobWhere,
+} from "../utils/invoiceJobs";
 
 export async function enqueueDocument(input: {
   shop: string;
@@ -73,14 +77,14 @@ export async function enqueueDocument(input: {
     throw error;
   }
 }
-export async function processNextInvoiceJob() {
+export async function processNextInvoiceJob(shop?: string) {
   const cutoff = new Date(Date.now() - 15 * 60 * 1000);
   await prisma.invoiceJob.updateMany({
-    where: { status: "PROCESSING", lockedAt: { lt: cutoff } },
+    where: staleInvoiceJobWhere(shop, cutoff),
     data: { status: "QUEUED", leaseToken: null, lockedAt: null },
   });
   const job = await prisma.invoiceJob.findFirst({
-    where: { status: "QUEUED", availableAt: { lte: new Date() } },
+    where: queuedInvoiceJobWhere(shop, new Date()),
     orderBy: { createdAt: "asc" },
   });
   if (!job) return false;

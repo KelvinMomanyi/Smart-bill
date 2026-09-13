@@ -9,7 +9,7 @@ import {
 } from "../utils/invoiceRules";
 import { normalizeDate, parseInvoiceText } from "../utils/parser.server";
 import { parseStructuredPoItems } from "../utils/poItems.server";
-import { matchPoLine } from "../utils/poMatching";
+import { matchPoLine, receiptStatus } from "../utils/poMatching";
 import { allocateTax, formatForPlatform } from "../utils/accountingFormat";
 import {
   PLANS,
@@ -18,7 +18,11 @@ import {
   usageMonth,
 } from "../utils/plans";
 import { csvCell } from "../utils/csv";
-import { validateDocument } from "../utils/upload.server";
+import {
+  parseSupabaseDocumentKey,
+  validateDocument,
+} from "../utils/upload.server";
+import { SHOP_CURRENCY_QUERY } from "../utils/shopifyQueries";
 
 const invoice = {
   invoiceNumber: "INV-22",
@@ -86,6 +90,30 @@ test("purchase order entry preserves fractional quantities", () => {
     ]),
   );
   assert.equal(items[0].expectedQty, 2.5);
+  assert.equal(
+    parseStructuredPoItems(
+      JSON.stringify([
+        { name: "Free sample", expectedQty: "1", expectedRate: "0" },
+      ]),
+    )[0].expectedRate,
+    0,
+  );
+});
+test("purchase order entry rejects malformed, negative and extreme numbers", () => {
+  for (const expectedQty of ["2 boxes", "-1", "1000000001"]) {
+    assert.throws(() =>
+      parseStructuredPoItems(
+        JSON.stringify([{ name: "Fabric", expectedQty, expectedRate: "100" }]),
+      ),
+    );
+  }
+  for (const expectedRate of ["12 dollars", "-0.01", "1000000001"]) {
+    assert.throws(() =>
+      parseStructuredPoItems(
+        JSON.stringify([{ name: "Fabric", expectedQty: "1", expectedRate }]),
+      ),
+    );
+  }
 });
 test("PO matching rejects ambiguous descriptions and mismatched supplier SKUs", () => {
   const item = { name: "Fabric", sku: "FAB-1", quantity: 2.5, price: 100 };
@@ -104,6 +132,18 @@ test("PO matching rejects ambiguous descriptions and mismatched supplier SKUs", 
     matchPoLine(item, [{ id: "a", name: "Cloth", sku: "fab-1 " }])?.id,
     "a",
   );
+});
+test("physical receipt status distinguishes partial, complete and over-delivery", () => {
+  assert.equal(receiptStatus([{ expectedQty: 10, receivedQty: 4 }]), "PARTIAL");
+  assert.equal(
+    receiptStatus([{ expectedQty: 10, receivedQty: 10 }]),
+    "FULFILLED",
+  );
+  assert.equal(
+    receiptStatus([{ expectedQty: 10, receivedQty: 11 }]),
+    "MISMATCH",
+  );
+  assert.equal(receiptStatus([{ expectedQty: 10, receivedQty: 0 }]), "OPEN");
 });
 test("reports keep currencies separate instead of adding unlike amounts", () => {
   assert.deepEqual(
@@ -169,4 +209,35 @@ test("file capture rejects spoofed documents and files above the size limit", ()
       "application/pdf",
     ),
   );
+  assert.throws(() =>
+    validateDocument(
+      Buffer.from([0xff, 0xd8, 0xff, 0x00]),
+      "invoice.png",
+      "image/png",
+    ),
+  );
+});
+test("private document references stay inside the configured invoice bucket", () => {
+  assert.equal(
+    parseSupabaseDocumentKey(
+      "supabase://smartbill-documents/invoices/shop.myshopify.com/file.pdf",
+      "smartbill-documents",
+    ),
+    "invoices/shop.myshopify.com/file.pdf",
+  );
+  assert.throws(() =>
+    parseSupabaseDocumentKey(
+      "supabase://other-bucket/invoices/shop.myshopify.com/file.pdf",
+      "smartbill-documents",
+    ),
+  );
+  assert.throws(() =>
+    parseSupabaseDocumentKey(
+      "supabase://smartbill-documents/invoices/../file.pdf",
+      "smartbill-documents",
+    ),
+  );
+});
+test("Shopify GraphQL marker does not comment out the currency query", () => {
+  assert.match(SHOP_CURRENCY_QUERY, /^#graphql\r?\n\s*query\s+/);
 });

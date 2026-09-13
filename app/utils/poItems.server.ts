@@ -12,16 +12,32 @@ function parseNumber(value?: string | number | null) {
     return Number.isFinite(value) ? value : undefined;
   if (!value) return undefined;
 
-  const parsed = Number.parseFloat(String(value).replace(/[$,\s]/g, ""));
+  const parsed = Number(String(value).replace(/[$,\s]/g, ""));
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function normalizedQty(value?: string | number | null) {
+  const supplied = value != null && String(value).trim() !== "";
   const quantity = parseNumber(value);
-  if (quantity == null) return 1;
-  if (quantity <= 0)
-    throw new Error("Purchase order quantities must be positive.");
+  if (quantity == null) {
+    if (!supplied) return 1;
+    throw new Error("Purchase order quantities must be valid numbers.");
+  }
+  if (quantity <= 0 || quantity > 1_000_000_000)
+    throw new Error(
+      "Purchase order quantities must be positive and no more than 1,000,000,000.",
+    );
   return quantity;
+}
+
+function normalizedRate(value?: string | number | null) {
+  if (value == null || String(value).trim() === "") return undefined;
+  const rate = parseNumber(value);
+  if (rate == null || rate < 0 || rate > 1_000_000_000)
+    throw new Error(
+      "Purchase order rates must be valid, non-negative numbers no more than 1,000,000,000.",
+    );
+  return rate;
 }
 
 function cleanedText(value?: unknown) {
@@ -31,11 +47,15 @@ function cleanedText(value?: unknown) {
 export function parseStructuredPoItems(value?: string | null): ParsedPoItem[] {
   if (!value?.trim()) return [];
 
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(value);
-    if (!Array.isArray(parsed)) return [];
+    parsed = JSON.parse(value);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
 
-    return parsed
+  return parsed
       .map((item): ParsedPoItem | null => {
         const name = cleanedText(item?.name);
         if (!name) return null;
@@ -44,15 +64,12 @@ export function parseStructuredPoItems(value?: string | null): ParsedPoItem[] {
           sku: cleanedText(item?.sku) || undefined,
           name,
           expectedQty: normalizedQty(item?.expectedQty ?? item?.quantity),
-          expectedRate: parseNumber(item?.expectedRate ?? item?.rate),
+          expectedRate: normalizedRate(item?.expectedRate ?? item?.rate),
           shopifyProductId: cleanedText(item?.shopifyProductId) || undefined,
           shopifyVariantId: cleanedText(item?.shopifyVariantId) || undefined,
         };
       })
       .filter((item): item is ParsedPoItem => Boolean(item));
-  } catch {
-    return [];
-  }
 }
 
 export function parsePoItems(text: string): ParsedPoItem[] {
@@ -69,7 +86,7 @@ export function parsePoItems(text: string): ParsedPoItem[] {
           sku: skuMatch?.[1],
           name: skuMatch?.[2] || nameOrSku,
           expectedQty: normalizedQty(qty),
-          expectedRate: parseNumber(rate),
+          expectedRate: normalizedRate(rate),
         };
       }
 
@@ -84,7 +101,7 @@ export function parsePoItems(text: string): ParsedPoItem[] {
         sku: skuMatch?.[1],
         name: skuMatch?.[2] || rawName,
         expectedQty: normalizedQty(match[2]),
-        expectedRate: parseNumber(match[3]),
+        expectedRate: normalizedRate(match[3]),
       };
     })
     .filter((item): item is ParsedPoItem => Boolean(item?.name));

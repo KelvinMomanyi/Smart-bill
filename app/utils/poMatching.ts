@@ -16,3 +16,20 @@ export function matchPoLine(
   );
   return matches.length === 1 ? matches[0] : null;
 }
+
+export function receiptStatus(
+  items: { expectedQty: number; receivedQty: number }[],
+) {
+  if (
+    items.some(
+      (item) => item.receivedQty > item.expectedQty + 0.00001,
+    )
+  )
+    return "MISMATCH";
+  if (
+    items.length > 0 &&
+    items.every((item) => item.receivedQty >= item.expectedQty)
+  )
+    return "FULFILLED";
+  return items.some((item) => item.receivedQty > 0) ? "PARTIAL" : "OPEN";
+}

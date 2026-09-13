@@ -12,6 +12,7 @@ import {
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
 import { formatMoney } from "../utils/format";
+import { getUserRole } from "../utils/rbac.server";
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const url = new URL(request.url);
@@ -41,7 +42,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       ? { reviewStatus: status }
       : {}),
   };
-  const [invoices, count] = await Promise.all([
+  const [invoices, count, role] = await Promise.all([
     prisma.invoice.findMany({
       where,
       include: { vendor: true, purchaseOrder: true },
@@ -50,8 +51,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
       take: 25,
     }),
     prisma.invoice.count({ where }),
+    getUserRole(request),
   ]);
-  return json({ invoices, count, page, search, status });
+  return json({ invoices, count, page, search, status, role });
 }
 export default function InvoiceQueue() {
   const data = useLoaderData<typeof loader>();
@@ -124,7 +126,9 @@ export default function InvoiceQueue() {
                 <Button url={query(data.page + 1)}>Next</Button>
               )}
             </InlineStack>
-            <Button url="/api/exportCSV">Download approved invoices CSV</Button>
+            {data.role === "ADMIN" && (
+              <Button url="/api/exportCSV">Download approved invoices CSV</Button>
+            )}
           </BlockStack>
         </Card>
       </BlockStack>

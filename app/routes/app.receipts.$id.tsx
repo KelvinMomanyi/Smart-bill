@@ -15,7 +15,8 @@ import { Page, Card, BlockStack, Text, Banner, Button } from "@shopify/polaris";
 import prisma from "../db.server";
 import { requireAdmin } from "../utils/rbac.server";
 import { requireSubscription } from "../services/billing.server";
-import { reconcileInvoiceWithPO } from "../services/poReconciliation.server";
+import { refreshPurchaseOrder } from "../services/poReconciliation.server";
+import { receiptStatus } from "../utils/poMatching";
 export async function loader({ request, params }: LoaderFunctionArgs) {
   const { session } = await requireAdmin(request);
   const po = await prisma.purchaseOrder.findFirst({
@@ -86,15 +87,18 @@ export async function action({ request, params }: ActionFunctionArgs) {
           where: { id: row.purchaseOrderItemId },
           data: { receivedQty: { increment: row.quantity } },
         });
-      const complete = po.items.every(
-        (i) =>
-          i.receivedQty +
-            (rows.find((r) => r.purchaseOrderItemId === i.id)?.quantity || 0) >=
-          i.expectedQty,
+      const status = receiptStatus(
+        po.items.map((item) => ({
+          expectedQty: item.expectedQty,
+          receivedQty:
+            item.receivedQty +
+            (rows.find((row) => row.purchaseOrderItemId === item.id)?.quantity ||
+              0),
+        })),
       );
       await tx.purchaseOrder.update({
         where: { id },
-        data: { status: complete ? "FULFILLED" : "PARTIAL" },
+        data: { status },
       });
       await tx.auditEvent.create({
         data: {
@@ -109,11 +113,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
         },
       });
     });
-    const invoices = await prisma.invoice.findMany({
-      where: { shop: session.shop, purchaseOrderId: id },
-    });
-    for (const invoice of invoices)
-      await reconcileInvoiceWithPO(invoice.id, id);
+    await refreshPurchaseOrder(session.shop, id);
     return json({
       success: true as const,
       message: "Physical receipt recorded.",

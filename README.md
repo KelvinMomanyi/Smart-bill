@@ -30,7 +30,7 @@ Reports keep each currency separate. Weekly time-saving estimates use the measur
 
 ## Local setup and checks
 
-Use Node.js 22 or 24, PostgreSQL, a Shopify development store and the environment variables in `.env.example`. Supply actual values through your environment or a private `.env` file. Firebase Admin credentials and a private storage bucket are required for file uploads; pasted text works without file storage.
+Use Node.js 22 or 24, PostgreSQL, a Shopify development store and the environment variables in `.env.example`. Supply actual values through your environment or a private `.env` file. Supabase project credentials are required for file uploads; pasted text works without file storage. Set `SUPABASE_URL`, a server-only `SUPABASE_SECRET_KEY` (or legacy `SUPABASE_SERVICE_ROLE_KEY`) and `SUPABASE_STORAGE_BUCKET`. The first storage operation creates the bucket when needed and enforces private access, the 10 MB limit and SmartBill's accepted document MIME types. Never expose the secret key to browser code.
 
 ```sh
 npm ci
@@ -46,6 +46,13 @@ Run the queue worker in a separate terminal with the same environment:
 npm run worker
 ```
 
+When a merchant keeps the SmartBill dashboard open, the browser also asks the
+server to process one queued document at a time. This makes single-document
+processing usable on hosts without a persistent worker. A worker or frequent
+scheduler is still recommended so processing continues after the merchant
+closes SmartBill. The browser-triggered endpoint is authenticated, subscription
+checked and restricted to the signed-in shop.
+
 Checks do not apply migrations:
 
 ```sh
@@ -57,6 +64,32 @@ npm run build:check
 
 The automated tests cover parsing, invoice controls, pricing, CSV/upload validation and accounting workflows, including OAuth callbacks, company confirmation, taxed bills, token refresh, duplicate/concurrent exports, recovery and attachments. Accounting workflow tests use mocked APIs and a serialized database adapter with dummy credentials. They do not contact Shopify, Xero or QuickBooks, or prove production database concurrency.
 
+To smoke-test the real OCR engine and the configured private Supabase bucket,
+run the following from a trusted development machine. The script creates one
+generated invoice image, verifies extraction and parsing, uploads it, reads it
+back and deletes it in a `finally` block.
+
+```sh
+node --env-file=.env node_modules/vite-node/vite-node.mjs --config vite.tasks.config.ts scripts/smoke-runtime.ts
+```
+
+Add `--skip-storage` to verify image/PDF OCR and parsing when a Supabase
+bucket is not available.
+
+Use the stored offline sessions to run read-only Shopify authentication,
+currency and subscription checks with:
+
+```sh
+node --env-file=.env node_modules/vite-node/vite-node.mjs --config vite.tasks.config.ts scripts/smoke-shopify.ts
+```
+
+Run read-only dashboard and invoice-integrity checks against the configured
+database with:
+
+```sh
+node --env-file=.env node_modules/vite-node/vite-node.mjs --config vite.tasks.config.ts scripts/audit-data.ts
+```
+
 ## Deployment
 
 Set one stable HTTPS `SHOPIFY_APP_URL` and use that URL in `shopify.app.toml`, the Shopify app configuration and OAuth callbacks. The current TOML uses `https://smart-bill-self.vercel.app`. A temporary `trycloudflare.com` development URL only works while its tunnel is active; restarting development can change that URL. Updating source files does not deploy the app or update its remote Shopify configuration.
@@ -67,7 +100,7 @@ Local `npm run build` and `npm run build:check` only generate Prisma Client and 
 
 If a deployed app reports `P2022: Invoice.documentHash does not exist`, its Prisma Client is newer than its database schema. Apply the committed migrations to that deployment's database with `npm run prisma -- migrate deploy`, then verify with `npm run prisma -- migrate status`. Generating Prisma Client alone does not update database tables. See [Prisma's production migration guidance](https://www.prisma.io/docs/orm/v6/prisma-client/deployment/deploy-database-changes-with-prisma-migrate).
 
-Run a separate persistent Node service with `npm run worker`, sharing the database, Shopify credentials and Firebase configuration with the web service. Keep `eng.traineddata` in its working directory. The included Dockerfile provides a Node 22 Linux runtime and excludes local secrets; use the same image for web and worker services, changing the worker start command. The Docker image itself still needs to be built and tested on your deployment platform.
+Run a separate persistent Node service with `npm run worker`, sharing the database, Shopify credentials and Supabase configuration with the web service. Keep `eng.traineddata` in its working directory. The included Dockerfile provides a Node 22 Linux runtime and excludes local secrets; use the same image for web and worker services, changing the worker start command. The Docker image itself still needs to be built and tested on your deployment platform.
 
 Alternatively, a scheduler can call `/api/jobs/run` with `Authorization: Bearer <CRON_SECRET>` to process one queued document per call. Configure the schedule and execution time explicitly. The repository does not activate a scheduler. Stale worker leases recover after 15 minutes; failed documents are retried up to three times before requiring a manual retry.
 

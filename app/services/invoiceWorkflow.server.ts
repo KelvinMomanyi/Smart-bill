@@ -15,6 +15,7 @@ import {
   releaseInvoiceUsage,
 } from "./billing.server";
 import { reconcileInvoiceWithPO } from "./poReconciliation.server";
+import { SHOP_CURRENCY_QUERY } from "../utils/shopifyQueries";
 export { formatMoney } from "../utils/format";
 
 export function hashText(value: string) {
@@ -287,9 +288,7 @@ export async function createInvoiceFromInput(input: {
 export async function fetchShopCurrency(
   admin: Pick<AdminApiContext, "graphql">,
 ) {
-  const response = await admin.graphql(
-    `#graphql query SmartBillShopCurrency { shop { currencyCode } }`,
-  );
+  const response = await admin.graphql(SHOP_CURRENCY_QUERY);
   const json = await response.json();
   if (("errors" in json && json.errors) || !json.data?.shop?.currencyCode)
     throw new Error("Could not verify the Shopify store currency.");

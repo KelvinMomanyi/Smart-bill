@@ -28,6 +28,7 @@ import prisma from "../db.server";
 import { requireSubscription } from "../services/billing.server";
 import { getShopSettings } from "../services/invoiceWorkflow.server";
 import { formatMoney } from "../utils/format";
+import { validDate } from "../utils/invoiceRules";
 import { parsePoItems, parseStructuredPoItems } from "../utils/poItems.server";
 import { requireAdmin } from "../utils/rbac.server";
 
@@ -68,8 +69,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const fallbackItems = items.length > 0 ? items : parsePoItems(itemRows);
 
       if (!vendorName) throw new Error("Vendor name is required");
+      if (vendorName.length > 200)
+        throw new Error("Vendor name must be 200 characters or fewer.");
+      if (poNumber.length > 100)
+        throw new Error("Purchase order number must be 100 characters or fewer.");
+      if (notes.length > 2_000)
+        throw new Error("Purchase order notes must be 2,000 characters or fewer.");
+      if (expectedDate && !validDate(expectedDate))
+        throw new Error("Enter a valid expected delivery date.");
       if (fallbackItems.length === 0)
         throw new Error("Add at least one PO item");
+      if (fallbackItems.length > 200)
+        throw new Error("A purchase order can contain at most 200 items.");
 
       const vendor = await prisma.vendor.upsert({
         where: { shop_name: { shop, name: vendorName } },
@@ -99,7 +110,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
               shopifyVariantId: item.shopifyVariantId || null,
               name: item.name,
               expectedQty: item.expectedQty,
-              expectedRate: item.expectedRate || null,
+              expectedRate: item.expectedRate ?? null,
             })),
           },
         },

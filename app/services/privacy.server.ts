@@ -16,7 +16,7 @@ export async function eraseShopData(shop: string) {
     ...new Set(
       [...invoices, ...jobs]
         .map((i) => i.storageKey)
-        .filter((s): s is string => Boolean(s?.startsWith("gs://"))),
+        .filter((s): s is string => Boolean(s?.startsWith("supabase://"))),
     ),
   ];
   for (const key of keys) await deleteInvoiceDocument(key);

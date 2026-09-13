@@ -10,6 +10,7 @@ import {
   useLoaderData,
   useNavigation,
   useRevalidator,
+  useFetcher,
 } from "@remix-run/react";
 import { useEffect, useState } from "react";
 import {
@@ -36,9 +37,10 @@ import {
 import { enqueueDocument } from "../services/invoiceJobs.server";
 import { PLANS } from "../utils/plans";
 import { formatMoney } from "../utils/format";
+import { getUserRole } from "../utils/rbac.server";
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session, admin } = await authenticate.admin(request);
-  const [dashboard, subscription, used, purchaseOrders, jobs, pendingJobs] =
+  const [dashboard, subscription, used, purchaseOrders, jobs, pendingJobs, role] =
     await Promise.all([
       getDashboard(session.shop),
       subscriptionFor(admin),
@@ -64,6 +66,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       prisma.invoiceJob.count({
         where: { shop: session.shop, status: { in: ["QUEUED", "PROCESSING"] } },
       }),
+      getUserRole(request),
     ]);
   return json({
     dashboard,
@@ -72,6 +75,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     purchaseOrders,
     jobs,
     pendingJobs,
+    role,
     uploadLimitMb: process.env.VERCEL ? 4 : 25,
   });
 }
@@ -151,12 +155,16 @@ export default function Dashboard() {
     purchaseOrders,
     jobs,
     pendingJobs,
+    role,
     uploadLimitMb,
   } = useLoaderData<typeof loader>();
   const [uploadError, setUploadError] = useState("");
   const result = useActionData<typeof action>();
   const busy = useNavigation().state !== "idle";
   const revalidator = useRevalidator();
+  const processor = useFetcher<{ success: boolean; processed: boolean }>();
+  const processorState = processor.state;
+  const submitProcessing = processor.submit;
   useEffect(() => {
     if (!pendingJobs) return;
     const timer = setInterval(() => {
@@ -164,6 +172,16 @@ export default function Dashboard() {
     }, 5000);
     return () => clearInterval(timer);
   }, [pendingJobs, revalidator]);
+  useEffect(() => {
+    if (!pendingJobs || processorState !== "idle") return;
+    const timer = setTimeout(() => {
+      submitProcessing(
+        { intent: "process-next" },
+        { method: "post", action: "/api/jobs" },
+      );
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [pendingJobs, processorState, submitProcessing]);
   return (
     <Page
       title="SmartBill"
@@ -295,6 +313,11 @@ export default function Dashboard() {
               <Text as="h2" variant="headingMd">
                 Document processing
               </Text>
+              {pendingJobs > 0 && (
+                <Text as="p" tone="subdued">
+                  Keep SmartBill open while queued documents are processed.
+                </Text>
+              )}
               {jobs.map((job) => (
                 <div key={job.id}>
                   <Text as="p">
@@ -315,6 +338,7 @@ export default function Dashboard() {
                   )}
                   {job.status === "FAILED" && (
                     <Form method="post" action="/api/jobs">
+                      <input type="hidden" name="intent" value="retry-job" />
                       <input type="hidden" name="jobId" value={job.id} />
                       <Button submit>Retry processing</Button>
                     </Form>
@@ -341,10 +365,12 @@ export default function Dashboard() {
                 i.reviewStatus,
               ])}
             />
-            <InlineStack gap="300">
-              <Button url="/app/reconciliation">Purchase orders</Button>
-              <Button url="/app/reports">Weekly report</Button>
-            </InlineStack>
+            {role === "ADMIN" && (
+              <InlineStack gap="300">
+                <Button url="/app/reconciliation">Purchase orders</Button>
+                <Button url="/app/reports">Weekly report</Button>
+              </InlineStack>
+            )}
           </BlockStack>
         </Card>
       </BlockStack>
