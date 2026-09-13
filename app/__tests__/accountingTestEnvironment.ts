@@ -5,6 +5,7 @@ process.env.DATABASE_URL =
 process.env.SHOPIFY_API_KEY = "00000000000000000000000000000000";
 process.env.SHOPIFY_API_SECRET = "test-shopify-secret-for-unit-tests";
 process.env.SHOPIFY_APP_URL = "https://app.example";
+process.env.SHOPIFY_BILLING_TEST = "false";
 process.env.XERO_CLIENT_ID = "test-xero-client";
 process.env.XERO_CLIENT_SECRET = "test-xero-secret";
 process.env.QB_CLIENT_ID = "test-quickbooks-client";

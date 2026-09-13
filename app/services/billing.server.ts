@@ -1,9 +1,21 @@
 import prisma from "../db.server";
 import { authenticate, unauthenticated } from "../shopify.server";
 import { PLANS, planFromName, usageMonth, type PlanKey } from "../utils/plans";
+import { testBillingPlan } from "../utils/billingMode";
 
 type Admin = Awaited<ReturnType<typeof authenticate.admin>>["admin"];
 export async function subscriptionFor(admin: Admin) {
+  const simulatedPlan = testBillingPlan(process.env.SHOPIFY_BILLING_TEST);
+  if (simulatedPlan) {
+    return {
+      id: "smartbill-test-billing-bypass",
+      plan: simulatedPlan,
+      currentPrice: PLANS[simulatedPlan].price,
+      currentCurrency: "USD",
+      matchesPrice: true,
+    };
+  }
+
   const response = await admin.graphql(`#graphql
     query SmartBillSubscription {
       currentAppInstallation { activeSubscriptions { id name status test

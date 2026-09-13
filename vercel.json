@@ -1,4 +1,7 @@
 {
   "buildCommand": "npm run build:deploy",
-  "installCommand": "npm install"
+  "installCommand": "npm install",
+  "env": {
+    "SHOPIFY_BILLING_TEST": "true"
+  }
 }

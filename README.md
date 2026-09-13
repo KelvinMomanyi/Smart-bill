@@ -121,7 +121,7 @@ For Growth email capture, configure a Postmark-compatible inbound webhook to `/a
 
 ## Before publication
 
-- Apply the migration and test install/login with both the owner and a separate staff account. Approve a test subscription in a development store using `SHOPIFY_BILLING_TEST=true`; keep test billing off for production merchants.
+- Apply the migration and test install/login with both the owner and a separate staff account. `SHOPIFY_BILLING_TEST=true` temporarily treats authenticated installed stores as Growth subscribers so all paid features can be acceptance-tested without a charge. Set it to `false` and redeploy before publishing so Shopify subscription checks are enforced.
 - Upload real supplier samples, correct extraction, record partial deliveries, approve, preview costs, sync and restore on test products. Test usage exhaustion and duplicate capture.
 - Exercise accounting export and interrupted-response verification against test organisations, including tax and currency mismatch cases.
 - Deploy the compliance webhook subscriptions in `shopify.app.toml` and verify signed requests. Uninstall stops jobs and removes sessions/connections. Shop redaction deletes the shop's invoice files and app records; customer-specific topics are acknowledged because SmartBill stores supplier invoices, not customer/order records.

@@ -23,6 +23,7 @@ import {
   validateDocument,
 } from "../utils/upload.server";
 import { SHOP_CURRENCY_QUERY } from "../utils/shopifyQueries";
+import { testBillingPlan } from "../utils/billingMode";
 
 const invoice = {
   invoiceNumber: "INV-22",
@@ -183,6 +184,9 @@ test("plan boundaries enforce the advertised allowance and use UTC calendar mont
   assert.equal(usageAvailable("GROWTH", 249, 2), false);
   assert.equal(usageAvailable("GROWTH", 1, -1), false);
   assert.equal(usageMonth(new Date("2026-10-01T01:00:00+03:00")), "2026-09");
+  assert.equal(testBillingPlan("true"), "GROWTH");
+  assert.equal(testBillingPlan("false"), null);
+  assert.equal(testBillingPlan(undefined), null);
 });
 test("CSV escapes quotes, newlines and supplier-provided spreadsheet formulas", () => {
   assert.equal(csvCell('Vendor "A"\nLtd'), '"Vendor ""A""\nLtd"');

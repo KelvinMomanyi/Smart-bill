@@ -199,15 +199,10 @@ export default function Dashboard() {
         {!subscription && (
           <Banner tone="info" title="Start your 14-day trial">
             <p>
-              Shopify requires the store owner to approve a plan before the
-              trial begins. Plans start at $19 USD every 30 days after the
-              trial.
+              Plans start at $19 USD every 30 days. Choose a plan in Settings to
+              start capturing invoices.
             </p>
-            {role === "ADMIN" ? (
-              <Button url="/app/settings">Choose a plan and start trial</Button>
-            ) : (
-              <p>Ask the store owner or an approver to start the trial.</p>
-            )}
+            <Button url="/app/settings">Choose a plan</Button>
           </Banner>
         )}
         {result && (
@@ -268,72 +263,54 @@ export default function Dashboard() {
               <Text as="h2" variant="headingMd">
                 Capture supplier invoices
               </Text>
-              {subscription ? (
-                <>
-                  <label>
-                    Invoice documents{" "}
-                    <input
-                      name="invoiceFile"
-                      type="file"
-                      accept=".pdf,image/jpeg,image/png,image/gif,image/webp"
-                      multiple={subscription?.plan === "GROWTH"}
-                    />
-                  </label>
-                  <Text as="p" tone="subdued">
-                    PDFs and images, up to 10 MB and 10 pages each. Growth
-                    supports batches of up to 10 documents. Processing continues
-                    in the background.
-                  </Text>
-                  <Text as="p" tone="subdued">
-                    This host accepts up to {uploadLimitMb} MB total per upload
-                    batch.
-                  </Text>
-                  <label>
-                    Supplier name (optional) <input name="vendorName" />
-                  </label>
-                  <label>
-                    Purchase order{" "}
-                    <select name="purchaseOrderId">
-                      <option value="">No purchase order</option>
-                      {purchaseOrders.map((po) => (
-                        <option key={po.id} value={po.id}>
-                          {po.poNumber || po.id.slice(0, 8)} — {po.vendor.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    Or paste invoice text{" "}
-                    <textarea
-                      name="rawText"
-                      rows={6}
-                      style={{ width: "100%" }}
-                    />
-                  </label>
-                  <Text as="p" tone="subdued">
-                    Every invoice is saved for review. No product costs or
-                    accounting bills change during capture.
-                  </Text>
-                  <Button submit variant="primary" loading={busy}>
-                    Capture invoices
-                  </Button>
-                </>
-              ) : (
-                <Banner tone="info" title="Activate invoice capture">
-                  <p>
-                    Start the 14-day trial to upload or paste supplier invoices.
-                  </p>
-                  {role === "ADMIN" ? (
-                    <Button url="/app/settings" variant="primary">
-                      Start trial and activate capture
-                    </Button>
-                  ) : (
-                    <p>
-                      Ask the store owner or an approver to activate a plan.
-                    </p>
-                  )}
-                </Banner>
-              )}
+              <label>
+                Invoice documents{" "}
+                <input
+                  name="invoiceFile"
+                  type="file"
+                  accept=".pdf,image/jpeg,image/png,image/gif,image/webp"
+                  multiple={subscription?.plan === "GROWTH"}
+                />
+              </label>
+              <Text as="p" tone="subdued">
+                PDFs and images, up to 10 MB and 10 pages each. Growth supports
+                batches of up to 10 documents. Processing continues in the
+                background.
+              </Text>
+              <Text as="p" tone="subdued">
+                This host accepts up to {uploadLimitMb} MB total per upload
+                batch.
+              </Text>
+              <label>
+                Supplier name (optional) <input name="vendorName" />
+              </label>
+              <label>
+                Purchase order{" "}
+                <select name="purchaseOrderId">
+                  <option value="">No purchase order</option>
+                  {purchaseOrders.map((po) => (
+                    <option key={po.id} value={po.id}>
+                      {po.poNumber || po.id.slice(0, 8)} — {po.vendor.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Or paste invoice text{" "}
+                <textarea name="rawText" rows={6} style={{ width: "100%" }} />
+              </label>
+              <Text as="p" tone="subdued">
+                Every invoice is saved for review. No product costs or
+                accounting bills change during capture.
+              </Text>
+              <Button
+                submit
+                variant="primary"
+                loading={busy}
+                disabled={!subscription}
+              >
+                Capture invoices
+              </Button>
             </BlockStack>
           </Form>
         </Card>
