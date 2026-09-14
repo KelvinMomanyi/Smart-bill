@@ -23,18 +23,25 @@ export function validateDocument(
           ? "image/png"
           : buffer.subarray(0, 4).toString() === "GIF8"
             ? "image/gif"
-            : buffer.subarray(0, 4).toString() === "RIFF" &&
-                buffer.subarray(8, 12).toString() === "WEBP"
-              ? "image/webp"
-              : null;
+            : buffer.subarray(0, 2).toString() === "BM"
+              ? "image/bmp"
+              : buffer.subarray(0, 4).toString() === "RIFF" &&
+                  buffer.subarray(8, 12).toString() === "WEBP"
+                ? "image/webp"
+                : null;
   if (
     detectedType === "application/pdf" &&
     (contentType === detectedType || filename.toLowerCase().endsWith(".pdf"))
   ) {
     return detectedType;
   }
-  if (detectedType && contentType === detectedType) return detectedType;
-  throw new Error("Upload a valid PDF, JPEG, PNG, GIF or WebP document.");
+  if (
+    detectedType &&
+    (contentType === detectedType ||
+      (detectedType === "image/jpeg" && contentType === "image/jpg"))
+  )
+    return detectedType;
+  throw new Error("Upload a valid PDF, JPEG, PNG, GIF, BMP or WebP document.");
 }
 export async function uploadInvoiceImage(
   buffer: Buffer,
@@ -97,6 +104,17 @@ async function storageFile(key: string) {
     objectName: parseSupabaseDocumentKey(key, storage.bucket),
   };
 }
+// Call only after resolving a shop-owned invoice or job from the database.
+export async function invoiceDocumentDownloadUrl(key: string) {
+  const { files, objectName } = await storageFile(key);
+  const { data, error } = await files.createSignedUrl(objectName, 60);
+  if (error || !data?.signedUrl)
+    throw new Error("Unable to open the original invoice document.", {
+      cause: error,
+    });
+  return data.signedUrl;
+}
+
 // Call only after resolving a shop-owned invoice or job from the database.
 export async function readInvoiceDocument(key: string) {
   const { files, objectName } = await storageFile(key);

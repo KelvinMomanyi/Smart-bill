@@ -1,5 +1,38 @@
 # SmartBill Functional Test Report
 
+## OCR restoration verified on 14 September 2026
+
+This update supersedes the earlier OCR/queue descriptions below. Dashboard
+capture and retry now use the browser processor from
+../old/app/components/InvoiceUpload.tsx: Tesseract.js 4.1.1 in English on
+original images, and PDF.js 3.11.174 at 2x scale with sequential page OCR.
+The original five-page limit is enforced without silently omitting later pages.
+Progress, first-page preview and raw extracted text are available in capture.
+
+- Real Chromium OCR: a generated 500x650 PNG returned invoice SMOKE-1001 and
+  total USD 58.00 in 39.01 seconds including the first English-model download.
+  WebP returned the same fields in 2.56 seconds. A two-page PDF returned
+  PDF-SMOKE-1002 and total USD 69.60 in 9.12 seconds.
+- The real browser capture hook passed a two-document batch, stored-document
+  retry, preview, simulated save failure and recovery. Storage/save HTTP
+  responses were mocked for these browser tests; no live store data was changed.
+- 82 automated tests passed, including private original upload, one usage
+  reservation per document, subscription enforcement, shop isolation,
+  concurrency, interrupted-save recovery and browser PDF/resource handling.
+- TypeScript, lint and production compilation passed.
+- All 58,223 files in old matched the SHA-256 snapshot taken before implementation:
+  no files changed, disappeared or were added.
+
+Browser uploads wait in AWAITING_OCR and are not claimed by server workers.
+Completion stores the server-parsed invoice, original storage reference and
+review state. Existing failed/queued documents can use browser retry.
+Google credentials and the server OCR deadline apply only to unattended
+email/API workers. Deploy these source changes before testing this flow in the
+live Shopify app.
+
+The remaining sections record the earlier 13 September audit and its live
+integration limitations; they are not new live acceptance results.
+
 **Test date:** 13 September 2026  
 **Source workspace:** `C:\Users\user\Desktop\SMARTBILL\smart-bill`  
 **Public deployment:** <https://smart-bill-self.vercel.app>

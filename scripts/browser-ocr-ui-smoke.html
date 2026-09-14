@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>SmartBill capture flow verification</title>
+<body>
+  <h1>SmartBill capture flow verification</h1>
+  <p>Local test harness for the production capture hook. API requests must be mocked by the browser test.</p>
+  <div id="root"></div>
+  <script type="module">
+    import React from "react";
+    import { createRoot } from "react-dom/client";
+    import { useInvoiceOcr } from "/app/components/InvoiceOcr.tsx";
+    function Harness() {
+      const ocr = useInvoiceOcr(() => {});
+      return React.createElement("div", null,
+        React.createElement("form", {
+          onSubmit(event) {
+            event.preventDefault();
+            const form = new FormData(event.currentTarget);
+            void ocr.capture(form.getAll("file"), { vendorName: "Test Supplier", purchaseOrderId: "" });
+          }
+        },
+          React.createElement("input", { type: "file", name: "file", "aria-label": "Invoice documents", multiple: true, disabled: ocr.busy }),
+          React.createElement("button", { type: "submit", disabled: ocr.busy }, "Capture invoices")),
+        React.createElement("button", { disabled: ocr.busy, onClick: () => void ocr.retry("retry-job") }, "Retry processing"),
+        React.createElement("p", { role: "status" }, ocr.busy ? ocr.progress.status : "Idle"),
+        React.createElement("pre", { id: "state" }, JSON.stringify({
+          busy: ocr.busy, progress: ocr.progress, error: ocr.error, saved: ocr.saved,
+          rawText: ocr.preview?.rawText, pages: ocr.preview?.pageCount,
+          hasPreview: !!ocr.previewUrl,
+        })));
+    }
+    createRoot(document.querySelector("#root")).render(React.createElement(Harness));
+  </script>
+</body>
+</html>

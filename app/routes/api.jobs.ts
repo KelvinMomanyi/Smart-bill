@@ -7,7 +7,10 @@ import {
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
 import { requireSubscription } from "../services/billing.server";
-import { processNextInvoiceJob } from "../services/invoiceJobs.server";
+import {
+  completeBrowserInvoiceJob,
+  processNextInvoiceJob,
+} from "../services/invoiceJobs.server";
 export const maxDuration = 60;
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
@@ -32,6 +35,32 @@ export async function action({ request }: ActionFunctionArgs) {
     const { session } = await requireSubscription(request);
     const form = await request.formData();
     const intent = String(form.get("intent") || "retry-job");
+    if (intent === "complete-browser-ocr") {
+      const invoiceId = await completeBrowserInvoiceJob({
+        shop: session.shop,
+        actor: session.id,
+        jobId: String(form.get("jobId") || ""),
+        rawText: form.get("rawText"),
+        pageCount: Number(form.get("pageCount")),
+      });
+      return json({ success: true, invoiceId });
+    }
+    if (intent === "fail-browser-ocr") {
+      await prisma.invoiceJob.updateMany({
+        where: {
+          id: String(form.get("jobId") || ""),
+          shop: session.shop,
+          status: "AWAITING_OCR",
+        },
+        data: {
+          status: "FAILED",
+          error: String(
+            form.get("error") || "Browser OCR was interrupted.",
+          ).slice(0, 500),
+        },
+      });
+      return json({ success: true });
+    }
     if (intent === "process-next") {
       return json({
         success: true as const,

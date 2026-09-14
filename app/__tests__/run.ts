@@ -4,5 +4,7 @@ import "./poItems.test";
 import "./accountingExport.test";
 import "./invoiceControls.test";
 import "./invoiceJobs.test";
+import "./browserOcr.test";
+import "./browserOcrWorkflow.test";
 import "./accountingIntegration.test";
 import "./accountingWorkflow.test";

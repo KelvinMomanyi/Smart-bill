@@ -6,6 +6,7 @@ export const SUPABASE_DOCUMENT_MIME_TYPES = [
   "image/jpeg",
   "image/png",
   "image/gif",
+  "image/bmp",
   "image/webp",
 ] as const;
 

@@ -10,7 +10,6 @@ import {
   useLoaderData,
   useNavigation,
   useRevalidator,
-  useFetcher,
 } from "@remix-run/react";
 import { useEffect, useState } from "react";
 import {
@@ -38,6 +37,7 @@ import { enqueueDocument } from "../services/invoiceJobs.server";
 import { PLANS } from "../utils/plans";
 import { formatMoney } from "../utils/format";
 import { getUserRole } from "../utils/rbac.server";
+import { InvoiceOcrStatus, useInvoiceOcr } from "../components/InvoiceOcr";
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session, admin } = await authenticate.admin(request);
   const [
@@ -71,7 +71,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
       },
     }),
     prisma.invoiceJob.count({
-      where: { shop: session.shop, status: { in: ["QUEUED", "PROCESSING"] } },
+      where: {
+        shop: session.shop,
+        status: { in: ["QUEUED", "PROCESSING", "AWAITING_OCR"] },
+      },
     }),
     getUserRole(request),
   ]);
@@ -169,9 +172,7 @@ export default function Dashboard() {
   const result = useActionData<typeof action>();
   const busy = useNavigation().state !== "idle";
   const revalidator = useRevalidator();
-  const processor = useFetcher<{ success: boolean; processed: boolean }>();
-  const processorState = processor.state;
-  const submitProcessing = processor.submit;
+  const ocr = useInvoiceOcr(() => revalidator.revalidate());
   useEffect(() => {
     if (!pendingJobs) return;
     const timer = setInterval(() => {
@@ -179,16 +180,6 @@ export default function Dashboard() {
     }, 2000);
     return () => clearInterval(timer);
   }, [pendingJobs, revalidator]);
-  useEffect(() => {
-    if (!pendingJobs || processorState !== "idle") return;
-    const timer = setTimeout(() => {
-      submitProcessing(
-        { intent: "process-next" },
-        { method: "post", action: "/api/jobs" },
-      );
-    }, 500);
-    return () => clearTimeout(timer);
-  }, [pendingJobs, processorState, submitProcessing]);
   return (
     <Page
       title="SmartBill"
@@ -245,8 +236,14 @@ export default function Dashboard() {
               const form = new FormData(event.currentTarget);
               const files = form
                 .getAll("invoiceFile")
-                .filter((file): file is File => file instanceof File);
+                .filter(
+                  (file): file is File => file instanceof File && file.size > 0,
+                );
               setUploadError("");
+              if (ocr.busy) {
+                event.preventDefault();
+                return;
+              }
               if (
                 files.some((file) => file.size > 10 * 1024 * 1024) ||
                 files.reduce((sum, file) => sum + file.size, 0) >
@@ -256,63 +253,82 @@ export default function Dashboard() {
                 setUploadError(
                   `Use files up to 10 MB each and at most ${uploadLimitMb} MB in total per batch on this host.`,
                 );
+                return;
+              }
+              if (files.length > 10) {
+                event.preventDefault();
+                setUploadError("Choose at most 10 documents.");
+                return;
+              }
+              if (files.length) {
+                event.preventDefault();
+                void ocr.capture(files, {
+                  vendorName: String(form.get("vendorName") || ""),
+                  purchaseOrderId: String(form.get("purchaseOrderId") || ""),
+                });
               }
             }}
           >
-            <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">
-                Capture supplier invoices
-              </Text>
-              <label>
-                Invoice documents{" "}
-                <input
-                  name="invoiceFile"
-                  type="file"
-                  accept=".pdf,image/jpeg,image/png,image/gif,image/webp"
-                  multiple={subscription?.plan === "GROWTH"}
-                />
-              </label>
-              <Text as="p" tone="subdued">
-                PDFs and images, up to 10 MB and 10 pages each. Growth supports
-                batches of up to 10 documents. Processing continues in the
-                background.
-              </Text>
-              <Text as="p" tone="subdued">
-                This host accepts up to {uploadLimitMb} MB total per upload
-                batch.
-              </Text>
-              <label>
-                Supplier name (optional) <input name="vendorName" />
-              </label>
-              <label>
-                Purchase order{" "}
-                <select name="purchaseOrderId">
-                  <option value="">No purchase order</option>
-                  {purchaseOrders.map((po) => (
-                    <option key={po.id} value={po.id}>
-                      {po.poNumber || po.id.slice(0, 8)} — {po.vendor.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Or paste invoice text{" "}
-                <textarea name="rawText" rows={6} style={{ width: "100%" }} />
-              </label>
-              <Text as="p" tone="subdued">
-                Every invoice is saved for review. No product costs or
-                accounting bills change during capture.
-              </Text>
-              <Button
-                submit
-                variant="primary"
-                loading={busy}
-                disabled={!subscription}
-              >
-                Capture invoices
-              </Button>
-            </BlockStack>
+            <fieldset
+              disabled={ocr.busy || busy}
+              style={{ border: 0, padding: 0, margin: 0 }}
+            >
+              <BlockStack gap="300">
+                <Text as="h2" variant="headingMd">
+                  Capture supplier invoices
+                </Text>
+                <label>
+                  Invoice documents{" "}
+                  <input
+                    name="invoiceFile"
+                    type="file"
+                    accept=".pdf,image/jpeg,image/png,image/gif,image/bmp,image/webp"
+                    multiple={subscription?.plan === "GROWTH"}
+                  />
+                </label>
+                <Text as="p" tone="subdued">
+                  PDFs and images, up to 10 MB and 5 pages each. Growth supports
+                  batches of up to 10 documents. Recognition runs on your
+                  device; keep this page open until saving completes.
+                </Text>
+                <Text as="p" tone="subdued">
+                  This host accepts up to {uploadLimitMb} MB total per upload
+                  batch.
+                </Text>
+                <label>
+                  Supplier name (optional) <input name="vendorName" />
+                </label>
+                <label>
+                  Purchase order{" "}
+                  <select name="purchaseOrderId">
+                    <option value="">No purchase order</option>
+                    {purchaseOrders.map((po) => (
+                      <option key={po.id} value={po.id}>
+                        {po.poNumber || po.id.slice(0, 8)} — {po.vendor.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Or paste invoice text{" "}
+                  <textarea name="rawText" rows={6} style={{ width: "100%" }} />
+                </label>
+                <Text as="p" tone="subdued">
+                  Every invoice is saved for review. No product costs or
+                  accounting bills change during capture.
+                </Text>
+                <Button
+                  submit
+                  variant="primary"
+                  loading={busy || ocr.busy}
+                  disabled={!subscription}
+                >
+                  Capture invoices
+                </Button>
+              </BlockStack>
+            </fieldset>
           </Form>
+          <InvoiceOcrStatus ocr={ocr} />
         </Card>
         {jobs.length > 0 && (
           <Card>
@@ -322,13 +338,17 @@ export default function Dashboard() {
               </Text>
               {pendingJobs > 0 && (
                 <Text as="p" tone="subdued">
-                  Keep SmartBill open while queued documents are processed.
+                  Use Continue processing to recognize saved documents on this
+                  device.
                 </Text>
               )}
               {jobs.map((job) => (
                 <div key={job.id}>
                   <Text as="p">
-                    {job.filename} — {job.status}
+                    {job.filename} —{" "}
+                    {job.status === "AWAITING_OCR"
+                      ? "Ready for recognition"
+                      : job.status}
                     {job.pageCount > 0
                       ? ` (${job.pageCount} pages processed)`
                       : ""}
@@ -343,12 +363,17 @@ export default function Dashboard() {
                       Review invoice
                     </Link>
                   )}
-                  {job.status === "FAILED" && (
-                    <Form method="post" action="/api/jobs">
-                      <input type="hidden" name="intent" value="retry-job" />
-                      <input type="hidden" name="jobId" value={job.id} />
-                      <Button submit>Retry processing</Button>
-                    </Form>
+                  {["FAILED", "QUEUED", "AWAITING_OCR", "PROCESSING"].includes(
+                    job.status,
+                  ) && (
+                    <Button
+                      disabled={ocr.busy || !subscription}
+                      onClick={() => void ocr.retry(job.id)}
+                    >
+                      {job.status === "FAILED"
+                        ? "Retry processing"
+                        : "Continue processing"}
+                    </Button>
                   )}
                 </div>
               ))}

@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" />
+  <title>SmartBill browser OCR verification</title>
+  <body>
+    <h1>SmartBill browser OCR verification</h1>
+    <p>
+      Uses generated invoices and the actual browser processor. No store data is
+      read or saved.
+    </p>
+    <button id="run">Run real image and PDF OCR</button>
+    <p id="progress" role="status">Ready</p>
+    <pre id="results"></pre>
+    <script type="module">
+      import { processInvoiceInBrowser } from "/app/utils/browserOcr.ts";
+      const progress = document.querySelector("#progress");
+      const results = document.querySelector("#results");
+      function invoiceCanvas() {
+        const canvas = document.createElement("canvas");
+        canvas.width = 500;
+        canvas.height = 650;
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "white";
+        ctx.fillRect(0, 0, 500, 650);
+        ctx.fillStyle = "black";
+        ctx.font = "bold 30px Arial";
+        ctx.fillText("INVOICE", 28, 48);
+        ctx.font = "17px Arial";
+        [
+          "Supplier: SmartBill Runtime Supplies",
+          "Invoice No: SMOKE-1001",
+          "Invoice Date: 2026-09-14",
+          "Description Qty Rate Amount",
+          "PAPER-10 Printer Paper 2 25.00 50.00",
+          "Subtotal 50.00",
+          "Tax 8.00",
+          "Total USD 58.00",
+        ].forEach((line, i) => ctx.fillText(line, 28, 92 + i * 48));
+        return canvas;
+      }
+      function invoicePdf() {
+        const streams = [
+          [
+            "INVOICE PDF-SMOKE-1002",
+            "Supplier: SmartBill PDF Supplies",
+            "Invoice Date: 2026-09-14",
+            "Description Qty Rate Amount",
+            "Printer Ink 2 30.00 60.00",
+          ],
+          [
+            "INVOICE PDF-SMOKE-1002",
+            "Subtotal 60.00",
+            "Tax 9.60",
+            "Total USD 69.60",
+          ],
+        ].map((lines) =>
+          [
+            "BT",
+            "/F1 18 Tf",
+            "72 740 Td",
+            ...lines.flatMap((line, i) => [
+              ...(i ? ["0 -32 Td"] : []),
+              "(" + line + ") Tj",
+            ]),
+            "ET",
+          ].join("\n"),
+        );
+        const objects = [
+          "<< /Type /Catalog /Pages 2 0 R >>",
+          "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
+          "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R >>",
+          "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 7 0 R >>",
+          "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+          ...streams.map(
+            (content) =>
+              "<< /Length " +
+              content.length +
+              " >>\nstream\n" +
+              content +
+              "\nendstream",
+          ),
+        ];
+        let pdf = "%PDF-1.4\n";
+        const offsets = [0];
+        objects.forEach((object, i) => {
+          offsets.push(pdf.length);
+          pdf += i + 1 + " 0 obj\n" + object + "\nendobj\n";
+        });
+        const xref = pdf.length;
+        pdf += "xref\n0 " + (objects.length + 1) + "\n0000000000 65535 f \n";
+        pdf += offsets
+          .slice(1)
+          .map((offset) => String(offset).padStart(10, "0") + " 00000 n \n")
+          .join("");
+        pdf +=
+          "trailer\n<< /Size " +
+          (objects.length + 1) +
+          " /Root 1 0 R >>\nstartxref\n" +
+          xref +
+          "\n%%EOF\n";
+        return new File([pdf], "smoke.pdf", { type: "application/pdf" });
+      }
+      document.querySelector("#run").onclick = async (event) => {
+        event.target.disabled = true;
+        const checks = [];
+        results.textContent = "";
+        try {
+          const canvas = invoiceCanvas();
+          for (const type of ["image/png", "image/webp", "application/pdf"]) {
+            const blob =
+              type === "application/pdf"
+                ? null
+                : await new Promise((resolve) => canvas.toBlob(resolve, type));
+            const file = blob
+              ? new File([blob], "smoke." + type.split("/")[1], { type })
+              : invoicePdf();
+            const start = performance.now();
+            const result = await processInvoiceInBrowser(file, (update) => {
+              progress.textContent =
+                type + ": " + update.status + " " + update.progress + "%";
+            });
+            const pdf = type === "application/pdf";
+            if (!result.rawText.includes(pdf ? "69.60" : "58.00"))
+              throw new Error(
+                type + ": invoice total was not recognized: " + result.rawText,
+              );
+            if (!result.rawText.includes(pdf ? "PDF-SMOKE-1002" : "SMOKE-1001"))
+              throw new Error(type + ": invoice number was not recognized");
+            if (result.pageCount !== (pdf ? 2 : 1))
+              throw new Error(type + ": wrong page count");
+            checks.push({
+              type,
+              passed: true,
+              pageCount: result.pageCount,
+              milliseconds: Math.round(performance.now() - start),
+            });
+            results.textContent = JSON.stringify(checks, null, 2);
+          }
+          progress.textContent = "All browser OCR checks passed";
+        } catch (error) {
+          progress.textContent = "Browser OCR check failed";
+          results.textContent = JSON.stringify(
+            { checks, error: error.message },
+            null,
+            2,
+          );
+        } finally {
+          event.target.disabled = false;
+        }
+      };
+    </script>
+  </body>
+</html>

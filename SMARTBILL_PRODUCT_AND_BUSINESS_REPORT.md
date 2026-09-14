@@ -113,7 +113,7 @@ The app does not pay the supplier. The merchant still makes the payment decision
 
 SmartBill accepts supported PDFs and images, and it also allows pasted text. It extracts supplier information, invoice identifiers, dates, currency, tax, totals and line items.
 
-The implemented extraction path uses embedded PDF text when available, Google Cloud Vision for production document OCR, Tesseract as a configurable local fallback, and rules-based parsing. The Tesseract fallback uses English language data. There is no verified basis for advertising universal language support, a guaranteed accuracy percentage, or fully autonomous accounting.
+Dashboard capture and retries use the restored browser Tesseract processor in English, with original image sizing, PDF pages rendered at 2x, progress and previews. Server email/API workers retain embedded PDF text extraction, Google Cloud Vision and server Tesseract fallback. Both flows use server-side rules-based invoice parsing. There is no verified basis for advertising universal language support, a guaranteed accuracy percentage, or fully autonomous accounting.
 
 Fractional quantities are preserved, and identical repeated lines are retained. Numeric dates can follow day/month/year or month/day/year settings.
 
@@ -179,7 +179,7 @@ File uploads create persisted jobs. The dashboard shows queue status, progress a
 
 Growth includes batches of up to 10 documents and code for an inbound invoice email webhook. Email capture requires a configured receiving domain, mail provider and webhook credentials.
 
-**Business value:** Staff can submit documents without waiting for each OCR operation to finish in the browser. This depends on the worker or scheduler actually running.
+**Business value:** Browser uploads provide visible progress and can be resumed from their stored originals. Keep the capture page open until saving completes. Unattended email/API processing depends on a worker or scheduler.
 
 ### 5.9 Duplicate protection and activity history
 
@@ -340,7 +340,7 @@ For an eligible early-stage account below the threshold, $2,800 of gross revenue
 | Maintenance                 | Fix defects and follow platform changes                | Engineering time, dependency updates and incident work             |
 | Administration and tax      | Operate the business                                   | Actual professional fees and applicable obligations                |
 
-Text-based PDF pages bypass image OCR. Google Cloud Vision charges and quotas apply to production image and scanned-PDF OCR; the Tesseract fallback uses application CPU and memory instead. Storage, failed attempts and support also contribute to operating cost.
+Dashboard OCR runs on the merchant device, so recognition itself does not incur Google Vision charges. Unattended email/API workers can bypass OCR for text PDFs, use Google Vision within its charges/quotas, or fall back to server Tesseract CPU and memory. Storage, failed attempts and support also contribute to operating cost.
 
 ### 10.3 Accounting integrations can add fixed costs
 
