@@ -10,14 +10,14 @@ import { extractTextFromDocument } from "../app/utils/ocr.server";
 import { parseInvoiceText } from "../app/utils/parser.server";
 
 function makeInvoiceImage() {
-  const canvas = createCanvas(1400, 900);
+  const canvas = createCanvas(500, 650);
   const context = canvas.getContext("2d");
   context.fillStyle = "white";
   context.fillRect(0, 0, canvas.width, canvas.height);
   context.fillStyle = "black";
-  context.font = "bold 48px Arial";
-  context.fillText("INVOICE", 80, 90);
-  context.font = "32px Arial";
+  context.font = "bold 30px Arial";
+  context.fillText("INVOICE", 28, 48);
+  context.font = "17px Arial";
   const lines = [
     "Supplier: SmartBill Runtime Supplies",
     "Invoice No: SMOKE-1001",
@@ -28,7 +28,7 @@ function makeInvoiceImage() {
     "Tax 8.00",
     "Total USD 58.00",
   ];
-  lines.forEach((line, index) => context.fillText(line, 80, 170 + index * 75));
+  lines.forEach((line, index) => context.fillText(line, 28, 92 + index * 48));
   return canvas.toBuffer("image/png");
 }
 
@@ -87,6 +87,7 @@ async function main() {
     "image/png",
   );
 
+  const imageOcrStartedAt = Date.now();
   const ocr = await extractTextFromDocument(image, {
     filename: "smartbill-runtime-smoke.png",
     mimeType: "image/png",
@@ -96,6 +97,7 @@ async function main() {
   assert.match(ocr.text, /SMOKE-1001/i);
   assert.equal(parsed.invoiceNumber, "SMOKE-1001");
   assert.equal(parsed.total, 58);
+  const imageOcrMs = Date.now() - imageOcrStartedAt;
 
   const pdfOcr = await extractTextFromDocument(makeInvoicePdf(), {
     filename: "smartbill-runtime-smoke.pdf",
@@ -111,6 +113,7 @@ async function main() {
     console.log(
       JSON.stringify({
         imageOcr: "passed",
+        imageOcrMs,
         pdfOcr: "passed",
         parsedInvoices: "passed",
         privateStorageRoundTrip: "skipped",
@@ -137,6 +140,7 @@ async function main() {
   console.log(
     JSON.stringify({
       imageOcr: "passed",
+      imageOcrMs,
       pdfOcr: "passed",
       parsedInvoices: "passed",
       privateStorageRoundTrip: "passed",

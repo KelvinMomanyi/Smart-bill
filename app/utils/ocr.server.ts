@@ -53,12 +53,13 @@ type ExtractTextOptions = {
   onProgress?: (page: number, total: number) => Promise<void>;
 };
 
-const PDF_RENDER_DPI = 300;
-const MIN_OCR_WIDTH = 1800;
-const MAX_OCR_EDGE = 3600;
+const PDF_RENDER_DPI = 220;
+const MIN_OCR_WIDTH = 1400;
+const MAX_OCR_EDGE = 2800;
 const DEFAULT_MAX_PDF_PAGES = MAX_PDF_PAGES;
 const MIN_MEANINGFUL_TEXT_LENGTH = 24;
 const GOOGLE_PDF_PAGE_BATCH = 5;
+const GOOGLE_CALL_TIMEOUT_MS = 4000;
 const INVOICE_FIELD_PATTERNS = [
   /\binvoice\b/i,
   /\b(inv|invoice)\s*(no|number|#)\b/i,
@@ -184,8 +185,8 @@ function remainingTime(deadline: number) {
 }
 
 function cloudCallTimeout(deadline: number) {
-  // Leave enough of the overall function budget for the local fallback.
-  return Math.min(12000, remainingTime(deadline));
+  // Fail over quickly so Tesseract keeps almost the full serverless budget.
+  return Math.min(GOOGLE_CALL_TIMEOUT_MS, remainingTime(deadline));
 }
 
 async function withOcrTimeout<T>(promise: Promise<T>, deadline: number) {
@@ -309,13 +310,30 @@ function normalizeWhitespace(text: string) {
 function calculateImageScale(width: number, height: number) {
   const upScale = width < MIN_OCR_WIDTH ? MIN_OCR_WIDTH / width : 1;
   const maxScale = Math.min(MAX_OCR_EDGE / width, MAX_OCR_EDGE / height);
-  return Math.max(0.25, Math.min(upScale, maxScale));
+  return Math.max(0.01, Math.min(upScale, maxScale));
 }
 
 function calculatePdfScale(width: number, height: number) {
   const targetScale = PDF_RENDER_DPI / 72;
   const maxScale = Math.min(MAX_OCR_EDGE / width, MAX_OCR_EDGE / height);
-  return Math.max(1, Math.min(targetScale, maxScale));
+  return Math.max(0.01, Math.min(targetScale, maxScale));
+}
+
+export function ocrImageDimensions(width: number, height: number) {
+  if (
+    !Number.isFinite(width) ||
+    !Number.isFinite(height) ||
+    width <= 0 ||
+    height <= 0
+  ) {
+    throw new Error("OCR image dimensions must be positive numbers.");
+  }
+
+  const scale = calculateImageScale(width, height);
+  return {
+    height: Math.max(1, Math.round(height * scale)),
+    width: Math.max(1, Math.round(width * scale)),
+  };
 }
 
 function normalizeCanvasForOcr(canvas: Canvas) {
@@ -364,9 +382,7 @@ async function imageBufferForOcr(file: Buffer | Uint8Array | string) {
   if (typeof file === "string") return file;
 
   const image = await loadImage(Buffer.from(file));
-  const scale = calculateImageScale(image.width, image.height);
-  const width = Math.max(1, Math.round(image.width * scale));
-  const height = Math.max(1, Math.round(image.height * scale));
+  const { height, width } = ocrImageDimensions(image.width, image.height);
   const canvas = createCanvas(width, height);
   const context = canvas.getContext("2d");
 

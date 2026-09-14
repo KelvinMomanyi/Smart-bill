@@ -32,6 +32,7 @@ import {
   allowsTesseractFallback,
   configuredOcrProvider,
   hasUsableEmbeddedInvoiceText,
+  ocrImageDimensions,
 } from "../utils/ocr.server";
 
 const invoice = {
@@ -278,6 +279,17 @@ test("production OCR selects Google only when server credentials are available",
     /credentials are missing/,
   );
   assert.throws(() => configuredOcrProvider("unknown", true), /OCR_PROVIDER/);
+});
+test("OCR preprocessing keeps small invoices readable without oversized rasters", () => {
+  assert.deepEqual(ocrImageDimensions(500, 650), {
+    width: 1400,
+    height: 1820,
+  });
+  assert.deepEqual(ocrImageDimensions(5000, 4000), {
+    width: 2800,
+    height: 2240,
+  });
+  assert.throws(() => ocrImageDimensions(0, 650), /positive numbers/);
 });
 test("text-based invoice PDFs can bypass image OCR", () => {
   assert.equal(
