@@ -6,6 +6,8 @@ import {
   Path2D,
   type Canvas,
 } from "@napi-rs/canvas";
+import { existsSync } from "node:fs";
+import vision from "@google-cloud/vision";
 import Tesseract from "tesseract.js";
 import { MAX_PDF_PAGES } from "./plans";
 
@@ -56,6 +58,7 @@ const MIN_OCR_WIDTH = 1800;
 const MAX_OCR_EDGE = 3600;
 const DEFAULT_MAX_PDF_PAGES = MAX_PDF_PAGES;
 const MIN_MEANINGFUL_TEXT_LENGTH = 24;
+const GOOGLE_PDF_PAGE_BATCH = 5;
 const INVOICE_FIELD_PATTERNS = [
   /\binvoice\b/i,
   /\b(inv|invoice)\s*(no|number|#)\b/i,
@@ -69,6 +72,160 @@ const INVOICE_FIELD_PATTERNS = [
   /\b(tax|vat|gst)\b/i,
   /\b(total|amount\s+due|balance\s+due)\b/i,
 ];
+
+type OcrProvider = "google" | "tesseract";
+type GoogleCredentials = {
+  client_email: string;
+  private_key: string;
+  project_id?: string;
+};
+
+let googleClient:
+  | InstanceType<typeof vision.v1.ImageAnnotatorClient>
+  | undefined;
+
+function unquote(value: string) {
+  const trimmed = value.trim();
+  if (
+    trimmed.length >= 2 &&
+    ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+      (trimmed.startsWith("'") && trimmed.endsWith("'")))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+function serviceAccountJson() {
+  const plain =
+    process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON?.trim() ||
+    process.env.GOOGLE_CLOUD_CREDENTIALS_JSON?.trim() ||
+    process.env.GOOGLE_SERVICE_ACCOUNT_JSON?.trim();
+  if (plain) return unquote(plain);
+
+  const encoded = process.env.GOOGLE_APPLICATION_CREDENTIALS_BASE64?.trim();
+  if (!encoded) return;
+  try {
+    return Buffer.from(unquote(encoded), "base64").toString("utf8");
+  } catch {
+    throw new Error(
+      "Google Cloud Vision credentials are not valid base64-encoded JSON.",
+    );
+  }
+}
+
+function parseGoogleCredentials(raw: string): GoogleCredentials {
+  let parsed: Partial<GoogleCredentials>;
+  try {
+    parsed = JSON.parse(raw) as Partial<GoogleCredentials>;
+  } catch {
+    throw new Error(
+      "Google Cloud Vision credentials are not valid service-account JSON.",
+    );
+  }
+  if (!parsed.client_email || !parsed.private_key) {
+    throw new Error(
+      "Google Cloud Vision credentials must include client_email and private_key.",
+    );
+  }
+  return {
+    client_email: parsed.client_email,
+    private_key: parsed.private_key.replace(/\\n/g, "\n"),
+    project_id: parsed.project_id,
+  };
+}
+
+function googleConfigurationPresent() {
+  if (serviceAccountJson()) return true;
+  const keyFilename = unquote(
+    process.env.GOOGLE_APPLICATION_CREDENTIALS || "",
+  );
+  return Boolean(keyFilename && existsSync(keyFilename));
+}
+
+export function configuredOcrProvider(
+  requested = process.env.OCR_PROVIDER,
+  googleConfigured = googleConfigurationPresent(),
+): OcrProvider {
+  const provider = requested?.trim().toLowerCase() || "auto";
+  if (provider === "google") {
+    if (!googleConfigured) {
+      throw new Error(
+        "Google Cloud Vision OCR is selected but credentials are missing. Set GOOGLE_APPLICATION_CREDENTIALS_JSON in the server environment.",
+      );
+    }
+    return "google";
+  }
+  if (provider === "tesseract") return "tesseract";
+  if (provider !== "auto") {
+    throw new Error("OCR_PROVIDER must be auto, google, or tesseract.");
+  }
+  return googleConfigured ? "google" : "tesseract";
+}
+
+function getOcrTimeoutMs() {
+  const configured = Number.parseInt(process.env.OCR_TIMEOUT_MS || "", 10);
+  if (Number.isFinite(configured) && configured >= 5000) {
+    return Math.min(configured, 240000);
+  }
+  return process.env.VERCEL ? 50000 : 180000;
+}
+
+function remainingTime(deadline: number) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) {
+    throw new Error(
+      "OCR timed out. Try a clearer image or a shorter PDF, then retry processing.",
+    );
+  }
+  return remaining;
+}
+
+async function withOcrTimeout<T>(promise: Promise<T>, deadline: number) {
+  const remaining = remainingTime(deadline);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new Error(
+                "OCR timed out. Try a clearer image or a shorter PDF, then retry processing.",
+              ),
+            ),
+          remaining,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function getGoogleClient() {
+  if (googleClient) return googleClient;
+
+  const inline = serviceAccountJson();
+  if (inline) {
+    const credentials = parseGoogleCredentials(inline);
+    googleClient = new vision.v1.ImageAnnotatorClient({
+      credentials,
+      projectId: credentials.project_id,
+    });
+    return googleClient;
+  }
+
+  const keyFilename = unquote(process.env.GOOGLE_APPLICATION_CREDENTIALS || "");
+  if (!keyFilename || !existsSync(keyFilename)) {
+    throw new Error(
+      "Google Cloud Vision credential file is unavailable on this host. Set GOOGLE_APPLICATION_CREDENTIALS_JSON in Vercel instead of a local file path.",
+    );
+  }
+  googleClient = new vision.v1.ImageAnnotatorClient({ keyFilename });
+  return googleClient;
+}
 
 class NodeCanvasFactory {
   create(width: number, height: number) {
@@ -216,34 +373,156 @@ async function imageBufferForOcr(file: Buffer | Uint8Array | string) {
   return canvas.toBuffer("image/png");
 }
 
-async function createOcrWorker() {
-  const worker = await Tesseract.createWorker("eng", Tesseract.OEM.LSTM_ONLY, {
-    cacheMethod: "none",
-    gzip: false,
-    langPath: process.cwd(),
-  });
+async function createOcrWorker(deadline: number) {
+  const worker = await withOcrTimeout(
+    Tesseract.createWorker("eng", Tesseract.OEM.LSTM_ONLY, {
+      cacheMethod: "none",
+      gzip: false,
+      langPath: process.cwd(),
+    }),
+    deadline,
+  );
 
-  await worker.setParameters({
-    preserve_interword_spaces: "1",
-    tessedit_pageseg_mode: Tesseract.PSM.AUTO,
-    user_defined_dpi: String(PDF_RENDER_DPI),
-  });
-
-  return worker;
+  try {
+    await withOcrTimeout(
+      worker.setParameters({
+        preserve_interword_spaces: "1",
+        tessedit_pageseg_mode: Tesseract.PSM.AUTO,
+        user_defined_dpi: String(PDF_RENDER_DPI),
+      }),
+      deadline,
+    );
+    return worker;
+  } catch (error) {
+    await worker.terminate().catch(() => undefined);
+    throw error;
+  }
 }
 
 async function recognizeImageWithWorker(
   worker: Tesseract.Worker,
   image: Buffer | string,
+  deadline: number,
 ) {
   const {
     data: { confidence, text },
-  } = await worker.recognize(image);
+  } = await withOcrTimeout(worker.recognize(image), deadline);
 
   return {
     confidence: confidence || 0,
     text: normalizeWhitespace(text),
   };
+}
+
+function annotationResult(response: {
+  error?: { message?: string | null } | null;
+  fullTextAnnotation?: {
+    text?: string | null;
+    pages?: Array<{
+      blocks?: Array<{ confidence?: number | null }> | null;
+    }> | null;
+  } | null;
+  textAnnotations?: Array<{ description?: string | null }> | null;
+}) {
+  if (response.error?.message) {
+    throw new Error(
+      `Google Cloud Vision rejected the document: ${response.error.message}`,
+    );
+  }
+  const annotation = response.fullTextAnnotation;
+  const blocks = annotation?.pages?.flatMap((page) => page.blocks || []) || [];
+  const confidence = blocks.length
+    ? (blocks.reduce((sum, block) => sum + Number(block.confidence || 0), 0) /
+        blocks.length) *
+      100
+    : 0;
+  return {
+    confidence,
+    text: normalizeWhitespace(
+      annotation?.text || response.textAnnotations?.[0]?.description || "",
+    ),
+  };
+}
+
+async function recognizeImageWithGoogle(image: Buffer, deadline: number) {
+  try {
+    const [result] = await getGoogleClient().batchAnnotateImages(
+      {
+        requests: [
+          {
+            image: { content: image },
+            features: [{ type: "DOCUMENT_TEXT_DETECTION" }],
+          },
+        ],
+      },
+      { timeout: remainingTime(deadline) },
+    );
+    const response = result.responses?.[0];
+    if (!response) throw new Error("Google Cloud Vision returned no result.");
+    return annotationResult(response);
+  } catch (error) {
+    if (error instanceof Error && /OCR timed out/.test(error.message))
+      throw error;
+    throw new Error(
+      "Google Cloud Vision OCR failed. Check that the API is enabled and the Vercel service-account JSON is valid.",
+      { cause: error },
+    );
+  }
+}
+
+async function recognizePdfPagesWithGoogle(
+  buffer: Buffer | Uint8Array,
+  pageNumbers: number[],
+  deadline: number,
+) {
+  const pageResults = new Map<number, { confidence: number; text: string }>();
+
+  try {
+    for (
+      let offset = 0;
+      offset < pageNumbers.length;
+      offset += GOOGLE_PDF_PAGE_BATCH
+    ) {
+      const pages = pageNumbers.slice(offset, offset + GOOGLE_PDF_PAGE_BATCH);
+      const [result] = await getGoogleClient().batchAnnotateFiles(
+        {
+          requests: [
+            {
+              inputConfig: {
+                content: Buffer.from(buffer),
+                mimeType: "application/pdf",
+              },
+              features: [{ type: "DOCUMENT_TEXT_DETECTION" }],
+              pages,
+            },
+          ],
+        },
+        { timeout: remainingTime(deadline) },
+      );
+      const fileResponse = result.responses?.[0];
+      if (fileResponse?.error?.message) {
+        throw new Error(fileResponse.error.message);
+      }
+      const responses = fileResponse?.responses || [];
+      for (const [index, pageNumber] of pages.entries()) {
+        const response = responses[index];
+        if (!response) {
+          throw new Error(
+            `Google Cloud Vision returned no result for page ${pageNumber}.`,
+          );
+        }
+        pageResults.set(pageNumber, annotationResult(response));
+      }
+    }
+    return pageResults;
+  } catch (error) {
+    if (error instanceof Error && /OCR timed out/.test(error.message))
+      throw error;
+    throw new Error(
+      "Google Cloud Vision OCR failed. Check that the API is enabled and the Vercel service-account JSON is valid.",
+      { cause: error },
+    );
+  }
 }
 
 function textQualityScore(text: string, confidence = 0) {
@@ -263,6 +542,16 @@ function textQualityScore(text: string, confidence = 0) {
   const lengthScore = Math.min(normalized.length, 2500) * 0.4;
 
   return lengthScore + fieldScore + moneyScore + dateScore + confidence * 4;
+}
+
+export function hasUsableEmbeddedInvoiceText(text: string) {
+  const normalized = normalizeWhitespace(text);
+  if (normalized.length < 80 || !/\d/.test(normalized)) return false;
+  const fields = INVOICE_FIELD_PATTERNS.reduce(
+    (count, pattern) => count + (pattern.test(normalized) ? 1 : 0),
+    0,
+  );
+  return fields >= 2 || (fields >= 1 && normalized.length >= 250);
 }
 
 function normalizedLineKey(line: string) {
@@ -416,6 +705,7 @@ async function extractTextFromPdf(
   buffer: Buffer | Uint8Array,
   options: ExtractTextOptions,
 ): Promise<OcrDocumentResult> {
+  const deadline = Date.now() + getOcrTimeoutMs();
   const pdfjs = await loadPdfJs();
   const loadingTask = pdfjs.getDocument({
     canvasFactory: new NodeCanvasFactory(),
@@ -430,35 +720,97 @@ async function extractTextFromPdf(
     );
   }
   const pageLimit = Math.min(pdf.numPages, getMaxPdfPages(options.maxPdfPages));
+  const totalPages = pdf.numPages;
   const pages: OcrPageResult[] = [];
-  const worker = await createOcrWorker();
+  let completedPages = 0;
+  const reportProgress = async () => {
+    completedPages += 1;
+    await options.onProgress?.(completedPages, totalPages);
+  };
+  const needsOcr: Array<{
+    pageNumber: number;
+    page: PdfPageProxy;
+    embeddedText: string;
+  }> = [];
 
   try {
     for (let pageNumber = 1; pageNumber <= pageLimit; pageNumber += 1) {
       const page = await pdf.getPage(pageNumber);
-      const [embeddedText, renderedImage] = await Promise.all([
-        extractEmbeddedTextFromPdfPage(page),
-        renderPdfPageForOcr(page),
-      ]);
-      const ocrResult = await recognizeImageWithWorker(worker, renderedImage);
-      const selected = choosePageText(
-        embeddedText,
-        ocrResult.text,
-        ocrResult.confidence,
-      );
+      const embeddedText = await extractEmbeddedTextFromPdfPage(page);
+      if (hasUsableEmbeddedInvoiceText(embeddedText)) {
+        pages.push({
+          confidence: 100,
+          pageNumber,
+          source: "embedded",
+          text: embeddedText,
+        });
+        await reportProgress();
+      } else {
+        needsOcr.push({ pageNumber, page, embeddedText });
+      }
+    }
 
-      pages.push({
-        confidence: selected.source === "embedded" ? 100 : ocrResult.confidence,
-        pageNumber,
-        source: selected.source,
-        text: selected.text,
-      });
-      await options.onProgress?.(pageNumber, pdf.numPages);
+    if (needsOcr.length) {
+      const provider = configuredOcrProvider();
+      if (provider === "google") {
+        const cloudPages = await recognizePdfPagesWithGoogle(
+          buffer,
+          needsOcr.map(({ pageNumber }) => pageNumber),
+          deadline,
+        );
+        for (const pending of needsOcr) {
+          const ocrResult = cloudPages.get(pending.pageNumber) || {
+            confidence: 0,
+            text: "",
+          };
+          const selected = choosePageText(
+            pending.embeddedText,
+            ocrResult.text,
+            ocrResult.confidence,
+          );
+          pages.push({
+            confidence:
+              selected.source === "embedded" ? 100 : ocrResult.confidence,
+            pageNumber: pending.pageNumber,
+            source: selected.source,
+            text: selected.text,
+          });
+          await reportProgress();
+        }
+      } else {
+        const worker = await createOcrWorker(deadline);
+        try {
+          for (const pending of needsOcr) {
+            const renderedImage = await renderPdfPageForOcr(pending.page);
+            const ocrResult = await recognizeImageWithWorker(
+              worker,
+              renderedImage,
+              deadline,
+            );
+            const selected = choosePageText(
+              pending.embeddedText,
+              ocrResult.text,
+              ocrResult.confidence,
+            );
+            pages.push({
+              confidence:
+                selected.source === "embedded" ? 100 : ocrResult.confidence,
+              pageNumber: pending.pageNumber,
+              source: selected.source,
+              text: selected.text,
+            });
+            await reportProgress();
+          }
+        } finally {
+          await worker.terminate().catch(() => undefined);
+        }
+      }
     }
   } finally {
-    await Promise.allSettled([worker.terminate(), pdf.destroy()]);
+    await pdf.destroy().catch(() => undefined);
   }
 
+  pages.sort((left, right) => left.pageNumber - right.pageNumber);
   const text = normalizeWhitespace(pages.map((page) => page.text).join("\n\n"));
   const confidence =
     pages.length > 0
@@ -467,7 +819,7 @@ async function extractTextFromPdf(
 
   return {
     confidence,
-    pageCount: pdf.numPages,
+    pageCount: totalPages,
     pages,
     source: "pdf",
     text,
@@ -477,29 +829,39 @@ async function extractTextFromPdf(
 async function extractTextFromRasterImage(
   file: Buffer | Uint8Array | string,
 ): Promise<OcrDocumentResult> {
-  const worker = await createOcrWorker();
+  const deadline = Date.now() + getOcrTimeoutMs();
+  const provider = configuredOcrProvider();
+  let result: { confidence: number; text: string };
 
-  try {
-    const image = await imageBufferForOcr(file);
-    const result = await recognizeImageWithWorker(worker, image);
-
-    return {
-      confidence: result.confidence,
-      pageCount: 1,
-      pages: [
-        {
-          confidence: result.confidence,
-          pageNumber: 1,
-          source: "ocr",
-          text: result.text,
-        },
-      ],
-      source: "image",
-      text: result.text,
-    };
-  } finally {
-    await worker.terminate();
+  if (provider === "google") {
+    if (typeof file === "string") {
+      throw new Error("Google Cloud Vision requires the uploaded image bytes.");
+    }
+    result = await recognizeImageWithGoogle(Buffer.from(file), deadline);
+  } else {
+    const worker = await createOcrWorker(deadline);
+    try {
+      const image = await imageBufferForOcr(file);
+      result = await recognizeImageWithWorker(worker, image, deadline);
+    } finally {
+      await worker.terminate().catch(() => undefined);
+    }
   }
+
+  return {
+    confidence: result.confidence,
+    pageCount: 1,
+    pages: [
+      {
+        confidence: result.confidence,
+        pageNumber: 1,
+        source: "ocr",
+        text: result.text,
+      },
+    ],
+    source: "image",
+    text: result.text,
+  };
 }
 
 export async function extractTextFromDocument(

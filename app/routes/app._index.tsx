@@ -176,7 +176,7 @@ export default function Dashboard() {
     if (!pendingJobs) return;
     const timer = setInterval(() => {
       if (revalidator.state === "idle") revalidator.revalidate();
-    }, 5000);
+    }, 2000);
     return () => clearInterval(timer);
   }, [pendingJobs, revalidator]);
   useEffect(() => {
@@ -186,7 +186,7 @@ export default function Dashboard() {
         { intent: "process-next" },
         { method: "post", action: "/api/jobs" },
       );
-    }, 5000);
+    }, 500);
     return () => clearTimeout(timer);
   }, [pendingJobs, processorState, submitProcessing]);
   return (

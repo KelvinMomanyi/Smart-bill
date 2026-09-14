@@ -113,7 +113,7 @@ The app does not pay the supplier. The merchant still makes the payment decision
 
 SmartBill accepts supported PDFs and images, and it also allows pasted text. It extracts supplier information, invoice identifiers, dates, currency, tax, totals and line items.
 
-The implemented extraction path uses Tesseract OCR, PDF text/rendering tools and rules-based parsing. The current worker uses English language data. There is no verified basis for advertising universal language support, a guaranteed accuracy percentage, or fully autonomous accounting.
+The implemented extraction path uses embedded PDF text when available, Google Cloud Vision for production document OCR, Tesseract as a configurable local fallback, and rules-based parsing. The Tesseract fallback uses English language data. There is no verified basis for advertising universal language support, a guaranteed accuracy percentage, or fully autonomous accounting.
 
 Fractional quantities are preserved, and identical repeated lines are retained. Numeric dates can follow day/month/year or month/day/year settings.
 
@@ -340,7 +340,7 @@ For an eligible early-stage account below the threshold, $2,800 of gross revenue
 | Maintenance                 | Fix defects and follow platform changes                | Engineering time, dependency updates and incident work             |
 | Administration and tax      | Operate the business                                   | Actual professional fees and applicable obligations                |
 
-Tesseract running in the app avoids a mandatory charge from a hosted OCR vendor for each page in the current path. It does not make OCR free: processors, memory, storage, failed attempts and support still have costs.
+Text-based PDF pages bypass image OCR. Google Cloud Vision charges and quotas apply to production image and scanned-PDF OCR; the Tesseract fallback uses application CPU and memory instead. Storage, failed attempts and support also contribute to operating cost.
 
 ### 10.3 Accounting integrations can add fixed costs
 
@@ -507,7 +507,7 @@ The app has substantial implemented functionality and a deployed environment, bu
 | Existing records      | Five invoices and 15 line items remained after the repair                                          | These are not customer or revenue metrics                                                    |
 | Automated checks      | Earlier implementation validation passed 19 tests, TypeScript, lint and production build           | Does not establish live workflow accuracy, load capacity or every financial edge case        |
 | Deployment process    | Local Vercel configuration now builds, migrates and checks migration status                        | Adoption by the next deployed release has not been independently verified in this report     |
-| OCR queue             | Persistent jobs, retries and a worker command are implemented                                      | Worker/scheduler operation on the intended host needs confirmation                           |
+| OCR queue             | Persistent jobs, bounded execution, fast PDF text extraction, Google Vision and a worker command are implemented | Google credentials and worker/scheduler operation on the intended host need confirmation |
 | File/email capture    | Private-storage and inbound-webhook code is present                                                | Storage credentials, receiving domain and mail-provider setup need confirmation              |
 | Shopify cost sync     | Approval, preview, history and recovery are implemented                                            | Verify on development-store products and realistic supplier samples                          |
 | Accounting            | Connection, export and existing-bill verification paths exist                                      | Production credentials, account mappings, provider access and live testing need confirmation |

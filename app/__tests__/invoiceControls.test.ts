@@ -24,6 +24,14 @@ import {
 } from "../utils/upload.server";
 import { SHOP_CURRENCY_QUERY } from "../utils/shopifyQueries";
 import { testBillingPlan } from "../utils/billingMode";
+import {
+  normalizeSupabaseProjectUrl,
+  normalizeSupabaseServerKey,
+} from "../utils/supabase.server";
+import {
+  configuredOcrProvider,
+  hasUsableEmbeddedInvoiceText,
+} from "../utils/ocr.server";
 
 const invoice = {
   invoiceNumber: "INV-22",
@@ -240,6 +248,44 @@ test("private document references stay inside the configured invoice bucket", ()
       "supabase://smartbill-documents/invoices/../file.pdf",
       "smartbill-documents",
     ),
+  );
+});
+test("Supabase storage accepts only project URLs and server keys", () => {
+  assert.equal(
+    normalizeSupabaseProjectUrl("https://project-ref.supabase.co/storage/v1"),
+    "https://project-ref.supabase.co",
+  );
+  assert.equal(
+    normalizeSupabaseServerKey('"sb_secret_server-only"'),
+    "sb_secret_server-only",
+  );
+  assert.throws(() =>
+    normalizeSupabaseProjectUrl(
+      "https://supabase.com/dashboard/project/project-ref",
+    ),
+  );
+  assert.throws(() => normalizeSupabaseServerKey("sb_publishable_browser-key"));
+});
+test("production OCR selects Google only when server credentials are available", () => {
+  assert.equal(configuredOcrProvider("auto", false), "tesseract");
+  assert.equal(configuredOcrProvider("auto", true), "google");
+  assert.equal(configuredOcrProvider("tesseract", true), "tesseract");
+  assert.throws(
+    () => configuredOcrProvider("google", false),
+    /credentials are missing/,
+  );
+  assert.throws(() => configuredOcrProvider("unknown", true), /OCR_PROVIDER/);
+});
+test("text-based invoice PDFs can bypass image OCR", () => {
+  assert.equal(
+    hasUsableEmbeddedInvoiceText(
+      "INVOICE INV-1042\nDate 2026-09-14\nDescription Widget quantity 2\nSubtotal 100.00\nTax 16.00\nTotal 116.00",
+    ),
+    true,
+  );
+  assert.equal(
+    hasUsableEmbeddedInvoiceText("A short document with no invoice fields"),
+    false,
   );
 });
 test("Shopify GraphQL marker does not comment out the currency query", () => {

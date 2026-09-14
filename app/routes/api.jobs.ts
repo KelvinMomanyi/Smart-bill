@@ -8,6 +8,7 @@ import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
 import { requireSubscription } from "../services/billing.server";
 import { processNextInvoiceJob } from "../services/invoiceJobs.server";
+export const maxDuration = 60;
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const jobs = await prisma.invoiceJob.findMany({

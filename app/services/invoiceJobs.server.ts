@@ -15,6 +15,7 @@ import {
 import { persistCapturedInvoice } from "./invoiceWorkflow.server";
 import type { PlanKey } from "../utils/plans";
 import {
+  INVOICE_JOB_STALE_MS,
   queuedInvoiceJobWhere,
   staleInvoiceJobWhere,
 } from "../utils/invoiceJobs";
@@ -78,7 +79,7 @@ export async function enqueueDocument(input: {
   }
 }
 export async function processNextInvoiceJob(shop?: string) {
-  const cutoff = new Date(Date.now() - 15 * 60 * 1000);
+  const cutoff = new Date(Date.now() - INVOICE_JOB_STALE_MS);
   await prisma.invoiceJob.updateMany({
     where: staleInvoiceJobWhere(shop, cutoff),
     data: { status: "QUEUED", leaseToken: null, lockedAt: null },
@@ -157,7 +158,7 @@ export async function processNextInvoiceJob(shop?: string) {
       error instanceof Error ? error.message : "Document processing failed.";
     const terminal =
       job.attempts + 1 >= 3 ||
-      /limit|Duplicate|already captured|must contain|subscription|valid PDF/.test(
+      /limit|Duplicate|already captured|must contain|subscription|valid PDF|OCR timed out|OCR is selected|credential file is unavailable|credentials are not valid|Google Cloud Vision OCR failed/.test(
         message,
       );
     await prisma.invoiceJob.updateMany({

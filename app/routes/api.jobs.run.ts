@@ -1,6 +1,7 @@
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "@remix-run/node";
 import { timingSafeEqual } from "node:crypto";
 import { processNextInvoiceJob } from "../services/invoiceJobs.server";
+export const maxDuration = 60;
 export async function loader({
   request,
 }: LoaderFunctionArgs | ActionFunctionArgs) {
