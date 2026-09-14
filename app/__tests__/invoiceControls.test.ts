@@ -29,6 +29,7 @@ import {
   normalizeSupabaseServerKey,
 } from "../utils/supabase.server";
 import {
+  allowsTesseractFallback,
   configuredOcrProvider,
   hasUsableEmbeddedInvoiceText,
 } from "../utils/ocr.server";
@@ -270,6 +271,8 @@ test("production OCR selects Google only when server credentials are available",
   assert.equal(configuredOcrProvider("auto", false), "tesseract");
   assert.equal(configuredOcrProvider("auto", true), "google");
   assert.equal(configuredOcrProvider("tesseract", true), "tesseract");
+  assert.equal(allowsTesseractFallback("auto"), true);
+  assert.equal(allowsTesseractFallback("google"), false);
   assert.throws(
     () => configuredOcrProvider("google", false),
     /credentials are missing/,

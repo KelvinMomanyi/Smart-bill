@@ -137,9 +137,7 @@ function parseGoogleCredentials(raw: string): GoogleCredentials {
 
 function googleConfigurationPresent() {
   if (serviceAccountJson()) return true;
-  const keyFilename = unquote(
-    process.env.GOOGLE_APPLICATION_CREDENTIALS || "",
-  );
+  const keyFilename = unquote(process.env.GOOGLE_APPLICATION_CREDENTIALS || "");
   return Boolean(keyFilename && existsSync(keyFilename));
 }
 
@@ -163,6 +161,10 @@ export function configuredOcrProvider(
   return googleConfigured ? "google" : "tesseract";
 }
 
+export function allowsTesseractFallback(requested = process.env.OCR_PROVIDER) {
+  return !requested?.trim() || requested.trim().toLowerCase() === "auto";
+}
+
 function getOcrTimeoutMs() {
   const configured = Number.parseInt(process.env.OCR_TIMEOUT_MS || "", 10);
   if (Number.isFinite(configured) && configured >= 5000) {
@@ -179,6 +181,11 @@ function remainingTime(deadline: number) {
     );
   }
   return remaining;
+}
+
+function cloudCallTimeout(deadline: number) {
+  // Leave enough of the overall function budget for the local fallback.
+  return Math.min(12000, remainingTime(deadline));
 }
 
 async function withOcrTimeout<T>(promise: Promise<T>, deadline: number) {
@@ -455,7 +462,7 @@ async function recognizeImageWithGoogle(image: Buffer, deadline: number) {
           },
         ],
       },
-      { timeout: remainingTime(deadline) },
+      { timeout: cloudCallTimeout(deadline) },
     );
     const response = result.responses?.[0];
     if (!response) throw new Error("Google Cloud Vision returned no result.");
@@ -497,7 +504,7 @@ async function recognizePdfPagesWithGoogle(
             },
           ],
         },
-        { timeout: remainingTime(deadline) },
+        { timeout: cloudCallTimeout(deadline) },
       );
       const fileResponse = result.responses?.[0];
       if (fileResponse?.error?.message) {
@@ -752,12 +759,21 @@ async function extractTextFromPdf(
 
     if (needsOcr.length) {
       const provider = configuredOcrProvider();
+      let cloudPages:
+        | Map<number, { confidence: number; text: string }>
+        | undefined;
       if (provider === "google") {
-        const cloudPages = await recognizePdfPagesWithGoogle(
-          buffer,
-          needsOcr.map(({ pageNumber }) => pageNumber),
-          deadline,
-        );
+        try {
+          cloudPages = await recognizePdfPagesWithGoogle(
+            buffer,
+            needsOcr.map(({ pageNumber }) => pageNumber),
+            deadline,
+          );
+        } catch (error) {
+          if (!allowsTesseractFallback()) throw error;
+        }
+      }
+      if (cloudPages) {
         for (const pending of needsOcr) {
           const ocrResult = cloudPages.get(pending.pageNumber) || {
             confidence: 0,
@@ -837,7 +853,18 @@ async function extractTextFromRasterImage(
     if (typeof file === "string") {
       throw new Error("Google Cloud Vision requires the uploaded image bytes.");
     }
-    result = await recognizeImageWithGoogle(Buffer.from(file), deadline);
+    try {
+      result = await recognizeImageWithGoogle(Buffer.from(file), deadline);
+    } catch (error) {
+      if (!allowsTesseractFallback()) throw error;
+      const worker = await createOcrWorker(deadline);
+      try {
+        const image = await imageBufferForOcr(file);
+        result = await recognizeImageWithWorker(worker, image, deadline);
+      } finally {
+        await worker.terminate().catch(() => undefined);
+      }
+    }
   } else {
     const worker = await createOcrWorker(deadline);
     try {

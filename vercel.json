@@ -3,7 +3,7 @@
   "installCommand": "npm install",
   "env": {
     "SHOPIFY_BILLING_TEST": "true",
-    "OCR_PROVIDER": "google",
+    "OCR_PROVIDER": "auto",
     "OCR_TIMEOUT_MS": "50000"
   }
 }
