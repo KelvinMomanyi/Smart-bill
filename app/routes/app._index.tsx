@@ -7,12 +7,11 @@ import {
   Form,
   Link,
   useActionData,
-  useFetcher,
   useLoaderData,
   useNavigation,
   useRevalidator,
 } from "@remix-run/react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Page,
   Card,
@@ -39,7 +38,6 @@ import { PLANS } from "../utils/plans";
 import { formatMoney } from "../utils/format";
 import { getUserRole } from "../utils/rbac.server";
 import { InvoiceOcrStatus, useInvoiceOcr } from "../components/InvoiceOcr";
-import type { action as jobsAction } from "./api.jobs";
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session, admin } = await authenticate.admin(request);
   const [
@@ -174,21 +172,7 @@ export default function Dashboard() {
   const result = useActionData<typeof action>();
   const busy = useNavigation().state !== "idle";
   const revalidator = useRevalidator();
-  const deleteUpload = useFetcher<typeof jobsAction>();
-  const [deletingJobId, setDeletingJobId] = useState("");
-  const handledDeleteResponse = useRef<unknown>(null);
   const ocr = useInvoiceOcr(() => revalidator.revalidate());
-  useEffect(() => {
-    if (
-      deleteUpload.state !== "idle" ||
-      !deleteUpload.data ||
-      handledDeleteResponse.current === deleteUpload.data
-    )
-      return;
-    handledDeleteResponse.current = deleteUpload.data;
-    setDeletingJobId("");
-    revalidator.revalidate();
-  }, [deleteUpload.data, deleteUpload.state, revalidator]);
   useEffect(() => {
     if (!pendingJobs) return;
     const timer = setInterval(() => {
@@ -218,12 +202,6 @@ export default function Dashboard() {
           </Banner>
         )}
         {uploadError && <Banner tone="critical">{uploadError}</Banner>}
-        {deleteUpload.data && "error" in deleteUpload.data && (
-          <Banner tone="critical">{String(deleteUpload.data.error)}</Banner>
-        )}
-        {deleteUpload.data && "message" in deleteUpload.data && (
-          <Banner tone="success">{String(deleteUpload.data.message)}</Banner>
-        )}
         <Card>
           <InlineStack gap="500">
             <Text as="p">
@@ -370,9 +348,7 @@ export default function Dashboard() {
                     {job.filename} —{" "}
                     {job.status === "AWAITING_OCR"
                       ? "Ready for recognition"
-                      : job.status === "CANCELLED"
-                        ? "Cleanup pending"
-                        : job.status}
+                      : job.status}
                     {job.pageCount > 0
                       ? ` (${job.pageCount} pages processed)`
                       : ""}
@@ -387,57 +363,18 @@ export default function Dashboard() {
                       Review invoice
                     </Link>
                   )}
-                  <InlineStack gap="200">
-                    {[
-                      "FAILED",
-                      "QUEUED",
-                      "AWAITING_OCR",
-                      "PROCESSING",
-                    ].includes(job.status) && (
-                      <Button
-                        disabled={ocr.busy || !subscription}
-                        onClick={() => void ocr.retry(job.id)}
-                      >
-                        {job.status === "FAILED"
-                          ? "Retry processing"
-                          : "Continue processing"}
-                      </Button>
-                    )}
-                    {[
-                      "FAILED",
-                      "QUEUED",
-                      "AWAITING_OCR",
-                      "PROCESSING",
-                      "CANCELLED",
-                    ].includes(job.status) && (
-                      <Button
-                        tone="critical"
-                        disabled={ocr.busy || deleteUpload.state !== "idle"}
-                        loading={
-                          deletingJobId === job.id &&
-                          deleteUpload.state !== "idle"
-                        }
-                        onClick={() => {
-                          if (
-                            !window.confirm(
-                              `Delete ${job.filename}? The stored document and its processing history will be removed.`,
-                            )
-                          )
-                            return;
-                          setDeletingJobId(job.id);
-                          const form = new FormData();
-                          form.set("intent", "delete-upload");
-                          form.set("jobId", job.id);
-                          deleteUpload.submit(form, {
-                            method: "post",
-                            action: "/api/jobs",
-                          });
-                        }}
-                      >
-                        Delete upload
-                      </Button>
-                    )}
-                  </InlineStack>
+                  {["FAILED", "QUEUED", "AWAITING_OCR", "PROCESSING"].includes(
+                    job.status,
+                  ) && (
+                    <Button
+                      disabled={ocr.busy || !subscription}
+                      onClick={() => void ocr.retry(job.id)}
+                    >
+                      {job.status === "FAILED"
+                        ? "Retry processing"
+                        : "Continue processing"}
+                    </Button>
+                  )}
                 </div>
               ))}
             </BlockStack>

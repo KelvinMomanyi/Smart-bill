@@ -6,13 +6,9 @@ import {
 } from "@remix-run/node";
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
-import {
-  assertSubscription,
-  subscriptionFor,
-} from "../services/billing.server";
+import { requireSubscription } from "../services/billing.server";
 import {
   completeBrowserInvoiceJob,
-  deleteUploadedInvoiceJob,
   processNextInvoiceJob,
 } from "../services/invoiceJobs.server";
 export const maxDuration = 60;
@@ -36,18 +32,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 export async function action({ request }: ActionFunctionArgs) {
   try {
-    const { session, admin } = await authenticate.admin(request);
+    const { session } = await requireSubscription(request);
     const form = await request.formData();
     const intent = String(form.get("intent") || "retry-job");
-    if (intent === "delete-upload") {
-      await deleteUploadedInvoiceJob({
-        shop: session.shop,
-        jobId: String(form.get("jobId") || ""),
-      });
-      return json({ success: true, message: "Uploaded document deleted." });
-    }
-    const subscription = await subscriptionFor(admin);
-    assertSubscription(subscription?.plan || null);
     if (intent === "complete-browser-ocr") {
       const invoiceId = await completeBrowserInvoiceJob({
         shop: session.shop,

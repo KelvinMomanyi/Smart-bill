@@ -188,38 +188,6 @@ test("browser OCR errors release PDF resources and blank scans are not saved", a
   }
 });
 
-test("browser OCR stops and releases its worker when an upload is cancelled", async () => {
-  let rejectRecognition: ((reason: Error) => void) | undefined;
-  let terminated = false;
-  const mock = fakeRuntime(1, () =>
-    new Promise<Recognition>((_resolve, reject) => {
-      rejectRecognition = reject;
-    }),
-  );
-  mock.runtime.createWorker = async () => ({
-    setParameters: async () => undefined,
-    recognize: () =>
-      new Promise<Recognition>((_resolve, reject) => {
-        rejectRecognition = reject;
-      }),
-    terminate: async () => {
-      terminated = true;
-      rejectRecognition?.(new Error("Recognition cancelled"));
-    },
-  });
-  const controller = new AbortController();
-  const processing = processInvoiceInBrowser(
-    new File(["image"], "cancel.png", { type: "image/png" }),
-    () => undefined,
-    mock.runtime,
-    controller.signal,
-  );
-  await new Promise<void>((resolve) => setTimeout(resolve, 0));
-  controller.abort();
-  await assert.rejects(processing, /cancelled/i);
-  assert.equal(terminated, true);
-});
-
 test("weak OCR gets a sparse-layout accuracy pass and keeps the stronger result", async () => {
   const mock = fakeRuntime(1, async (call) =>
     call === 1
