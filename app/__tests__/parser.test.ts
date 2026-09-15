@@ -96,3 +96,220 @@ test("OCR normalization is conservative outside monetary fields", () => {
   assert.match(normalized, /Olson Services/);
   assert.match(normalized, /Total \$55\.89/);
 });
+
+test("parseInvoiceText captures rows with units and tax-code columns", () => {
+  const parsed = parseInvoiceText(`
+    Supplier: Warehouse Goods
+    Invoice No: WG-200
+    Date: 2026-09-15
+    Item Description | Qty | Unit Price | VAT | Amount
+    WGT-3000 Widget 3000 | 2 | EA | $27.945 | 16% | $55.89
+    SHIP-1 Delivery Fee | 1 | each | $10.00 | EXEMPT | $10.00
+    CASE-5 Storage Case | EA | 2 | $5.00 | $10.00 | VAT | 16%
+    Subtotal $75.89
+    Tax $10.54
+    Total USD $86.43
+  `);
+
+  assert.equal(parsed.items.length, 3);
+  assert.deepEqual(
+    parsed.items.map((item) => ({
+      sku: item.sku,
+      name: item.name,
+      quantity: item.quantity,
+      rate: item.rate,
+      amount: item.amount,
+    })),
+    [
+      {
+        sku: "WGT-3000",
+        name: "Widget 3000",
+        quantity: 2,
+        rate: 27.945,
+        amount: 55.89,
+      },
+      {
+        sku: "SHIP-1",
+        name: "Delivery Fee",
+        quantity: 1,
+        rate: 10,
+        amount: 10,
+      },
+      {
+        sku: "CASE-5",
+        name: "Storage Case",
+        quantity: 2,
+        rate: 5,
+        amount: 10,
+      },
+    ],
+  );
+});
+
+test("parseInvoiceText joins descriptions and values wrapped across OCR lines", () => {
+  const parsed = parseInvoiceText(`
+    Supplier: Support Company
+    Invoice No: SC-22
+    Date: 2026-09-15
+    Description
+    Qty
+    Unit Price
+    Amount
+    Annual support and
+    implementation package
+    2
+    $27.945
+    $55.89
+    Subtotal $55.89
+    Total USD $55.89
+  `);
+
+  assert.equal(parsed.items.length, 1);
+  assert.equal(parsed.items[0].name, "Annual support and implementation package");
+  assert.equal(parsed.items[0].quantity, 2);
+  assert.equal(parsed.items[0].rate, 27.945);
+  assert.equal(parsed.items[0].amount, 55.89);
+});
+
+test("parseInvoiceText handles amount-only and quantity-plus-amount tables", () => {
+  const amountOnly = parseInvoiceText(`
+    Invoice No: A-1
+    Date: 2026-09-15
+    Description Amount
+    On-site consultation $55.89
+    Total USD $55.89
+  `);
+  assert.equal(amountOnly.items.length, 1);
+  assert.equal(amountOnly.items[0].quantity, 1);
+  assert.equal(amountOnly.items[0].rate, 55.89);
+
+  const quantityAndAmount = parseInvoiceText(`
+    Invoice No: A-2
+    Date: 2026-09-15
+    Description Qty Amount
+    Printer paper 2 $55.90
+    Total USD $55.90
+  `);
+  assert.equal(quantityAndAmount.items.length, 1);
+  assert.equal(quantityAndAmount.items[0].quantity, 2);
+  assert.equal(quantityAndAmount.items[0].rate, 27.95);
+  assert.equal(quantityAndAmount.items[0].amount, 55.9);
+});
+
+test("parseInvoiceText reconstructs column-oriented OCR tables", () => {
+  const parsed = parseInvoiceText(`
+    Supplier: Column Supply
+    Invoice No: COL-90
+    Date: 2026-09-15
+    Description
+    Printer paper
+    Packing tape
+    Quantity
+    2
+    3
+    Unit Price
+    $10.00
+    $5.00
+    Amount
+    $20.00
+    $15.00
+    Subtotal $35.00
+    Total USD $35.00
+  `);
+
+  assert.deepEqual(
+    parsed.items.map((item) => [
+      item.name,
+      item.quantity,
+      item.rate,
+      item.amount,
+    ]),
+    [
+      ["Printer paper", 2, 10, 20],
+      ["Packing tape", 3, 5, 15],
+    ],
+  );
+});
+
+test("parseInvoiceText derives omitted line values from the available columns", () => {
+  const rateOnly = parseInvoiceText(`
+    Invoice No: RATE-1
+    Date: 2026-09-15
+    Product QTY Unit Rate
+    Total Care subscription 2 boxes $27.95
+    Total USD $55.90
+  `);
+  assert.equal(rateOnly.items.length, 1);
+  assert.equal(rateOnly.items[0].name, "Total Care subscription");
+  assert.equal(rateOnly.items[0].rate, 27.95);
+  assert.equal(rateOnly.items[0].amount, 55.9);
+
+  const columnAmountOnly = parseInvoiceText(`
+    Invoice No: COL-2
+    Date: 2026-09-15
+    Description
+    Printer paper
+    Packing tape
+    Quantity
+    2
+    3
+    Amount
+    $20.00
+    $15.00
+    Subtotal $35.00
+    Total USD $35.00
+  `);
+  assert.deepEqual(
+    columnAmountOnly.items.map((item) => [item.quantity, item.rate, item.amount]),
+    [
+      [2, 10, 20],
+      [3, 5, 15],
+    ],
+  );
+});
+
+test("line-item rates distinguish extended decimals from thousands groups", () => {
+  const parsed = parseInvoiceText(`
+    Invoice No: RATE-2
+    Date: 2026-09-15
+    Description Qty Rate Amount
+    Precision component 2 $27.945 $55.89
+    Bulk component 2 $1,234 $2,468
+    Subtotal $2,523.89
+    Total USD $2,523.89
+  `);
+  assert.equal(parsed.items[0].rate, 27.945);
+  assert.equal(parsed.items[0].amount, 55.89);
+  assert.equal(parsed.items[1].rate, 1234);
+  assert.equal(parsed.items[1].amount, 2468);
+});
+
+test("parseInvoiceText reconstructs columns when quantity is omitted", () => {
+  const parsed = parseInvoiceText(`
+    Invoice No: COL-3
+    Date: 2026-09-15
+    Description
+    Consulting service
+    Support plan
+    Unit Price
+    $55.89
+    $20.00
+    Amount
+    $55.89
+    $20.00
+    Subtotal $75.89
+    Total USD $75.89
+  `);
+  assert.deepEqual(
+    parsed.items.map((item) => [
+      item.name,
+      item.quantity,
+      item.rate,
+      item.amount,
+    ]),
+    [
+      ["Consulting service", 1, 55.89, 55.89],
+      ["Support plan", 1, 20, 20],
+    ],
+  );
+});

@@ -83,7 +83,7 @@ export function normalizeInvoiceOcrText(text: string) {
   return normalized;
 }
 
-function parseMoney(value?: string | null) {
+function parseMoney(value?: string | null, extendedDecimals = false) {
   if (!value) return undefined;
   let numeric = value
     .replace(new RegExp(currencyCodes, "gi"), "")
@@ -93,7 +93,11 @@ function parseMoney(value?: string | null) {
   const lastComma = numeric.lastIndexOf(",");
   const separator = Math.max(lastDot, lastComma);
   const fractionLength = separator >= 0 ? numeric.length - separator - 1 : 0;
-  if (separator >= 0 && fractionLength > 0 && fractionLength <= 2) {
+  if (
+    separator >= 0 &&
+    fractionLength > 0 &&
+    fractionLength <= (extendedDecimals ? 4 : 2)
+  ) {
     const integer = numeric.slice(0, separator).replace(/[.,]/g, "");
     numeric = integer + "." + numeric.slice(separator + 1);
   } else {
@@ -252,35 +256,131 @@ function normalizeItemName(name: string) {
     .trim();
 }
 
-function parseItemLine(line: string): ParsedInvoiceItem | null {
-  const cleanedLine = line
-    .replace(/[|]+/g, " ")
-    .replace(/\s{2,}/g, " ")
+type ItemColumnHints = {
+  seen: boolean;
+  quantity: boolean;
+  rate: boolean;
+  amount: boolean;
+};
+
+const emptyItemHints = (): ItemColumnHints => ({
+  seen: false,
+  quantity: false,
+  rate: false,
+  amount: false,
+});
+const quantityPattern = "\\d+(?:[.,]\\d+)?";
+const itemUnitToken =
+  "(?:x|ea(?:ch)?|pcs?|pieces?|units?|unit|nos?|sets?|cases?|dozen|kg|g|lb|lbs|hours?|hrs?|days?|boxes?|packs?|litres?|liters?|ltr|metres?|meters?)";
+const itemUnitPattern =
+  `(?:${itemUnitToken}\\.?\\s+)?`;
+
+function itemHeaderHints(line: string): ItemColumnHints | null {
+  const lower = line
+    .toLowerCase()
+    .replace(/[|:_-]+/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
+  const description = /\b(?:description|item|product|service|details?)\b/.test(
+    lower,
+  );
+  const quantity = /\b(?:qty|q\s*ty|quantity)\b/.test(lower);
+  const rate =
+    /\b(?:rate|price|cost|unit\s*(?:price|cost|rate|amount)|price\s*each|unitprice)\b/.test(
+      lower,
+    );
+  const amount =
+    /\b(?:amount|line\s*total|extended\s*(?:price|amount)|total\s*price)\b/.test(
+      lower,
+    ) ||
+    (/\btotal\b/.test(lower) &&
+      (quantity || rate || /^(?:description|item|product|service)\s+total$/.test(lower)));
+  const labelOnly =
+    /^(?:item\s*)?(?:description|details?)$|^(?:item|product|service)$|^(?:qty|q\s*ty|quantity)$|^(?:rate|price|cost|unit\s*(?:price|cost|rate|amount)|price\s*each|unitprice)$|^(?:amount|line\s*total|extended\s*(?:price|amount)|total\s*price)$/i.test(
+      lower,
+    );
+  const trailingValue = new RegExp(`${moneyPattern}\\s*$`, "i").test(line);
   if (
-    /^(?:description|item|sku|qty|quantity|rate|price|amount|total)\b/i.test(
-      cleanedLine,
-    )
+    !labelOnly &&
+    (trailingValue || !(description && (quantity || rate || amount)))
   )
     return null;
+  return { seen: true, quantity, rate, amount };
+}
 
-  const itemMatch = cleanedLine.match(
-    new RegExp(
-      `^(.+?)\\s+(\\d+(?:[.,]\\d+)?)\\s+${moneyPattern}\\s+${moneyPattern}$`,
-      "i",
-    ),
-  );
+function isItemSummaryLine(line: string) {
+  if (
+    /^\s*(?:subtotal|sub-total|tax|sales\s+tax|vat|gst|grand\s+total|invoice\s+total|amount\s+due|balance\s+due|net\s+amount)\b/i.test(
+      line,
+    )
+  )
+    return true;
+  return new RegExp(
+    `^\\s*total(?:\\s+(?:before\\s+tax|after\\s+tax))?\\s*:?(?:\\s*$|\\s+(?:${currencyCodes}|R\\$|KSh|[$\\u20ac\\u00a3\\u00a5\\u20b9\\u20a6\\u20b5\\u20b1]|[+-]?\\d))`,
+    "i",
+  ).test(line);
+}
 
-  if (!itemMatch) return null;
+function buildParsedItem(
+  rawDescription: string,
+  rawQuantity: string,
+  rawRate: string | undefined,
+  rawAmount?: string,
+): ParsedInvoiceItem | null {
+  const itemName = normalizeItemName(rawDescription);
+  const skuMatch = itemName.match(/^([A-Z0-9._/-]{3,})\s+(.+)$/);
+  const quantity = Number.parseFloat(rawQuantity.replace(",", "."));
+  const parsedAmount = parseMoney(rawAmount);
+  const standardRate = parseMoney(rawRate);
+  const extendedRate = parseMoney(rawRate, true);
+  let parsedRate = standardRate;
+  if (
+    standardRate != null &&
+    extendedRate != null &&
+    standardRate !== extendedRate
+  ) {
+    if (parsedAmount != null && quantity > 0) {
+      const standardDifference = Math.abs(
+        standardRate * quantity - parsedAmount,
+      );
+      const extendedDifference = Math.abs(
+        extendedRate * quantity - parsedAmount,
+      );
+      if (extendedDifference < standardDifference) parsedRate = extendedRate;
+    } else {
+      const numericRate = rawRate?.replace(/[^\d.,+-]/g, "") || "";
+      const separator = Math.max(
+        numericRate.lastIndexOf("."),
+        numericRate.lastIndexOf(","),
+      );
+      const integerPart = numericRate
+        .slice(0, separator)
+        .replace(/[.,+-]/g, "");
+      const fractionLength =
+        separator >= 0 ? numericRate.length - separator - 1 : 0;
+      if (fractionLength === 4 || /^0+$/.test(integerPart))
+        parsedRate = extendedRate;
+    }
+  }
+  const amount =
+    parsedAmount ??
+    (parsedRate != null && quantity > 0 ? parsedRate * quantity : undefined);
+  const rate =
+    parsedRate ??
+    (amount != null && quantity > 0 ? amount / quantity : undefined);
+  const description = skuMatch ? skuMatch[2] : itemName;
 
-  const rawDescription = normalizeItemName(itemMatch[1]);
-  const skuMatch = rawDescription.match(/^([A-Z0-9._-]{3,})\s+(.+)$/);
-  const quantity = Number.parseFloat(itemMatch[2].replace(",", "."));
-  const rate = parseMoney(itemMatch[3]) ?? 0;
-  const amount = parseMoney(itemMatch[4]) ?? quantity * rate;
-  const description = skuMatch ? skuMatch[2] : rawDescription;
-
-  if (!description || !Number.isFinite(quantity)) return null;
+  if (
+    !description ||
+    !Number.isFinite(quantity) ||
+    quantity <= 0 ||
+    quantity > 1_000_000_000 ||
+    amount == null ||
+    !Number.isFinite(amount) ||
+    rate == null ||
+    !Number.isFinite(rate)
+  )
+    return null;
 
   return {
     sku: skuMatch?.[1],
@@ -293,38 +393,306 @@ function parseItemLine(line: string): ParsedInvoiceItem | null {
   };
 }
 
+function parseItemLine(
+  line: string,
+  hints: ItemColumnHints = emptyItemHints(),
+  relaxed = false,
+): ParsedInvoiceItem | null {
+  const cleanedLine = line
+    .replace(/[|]+/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  if (
+    !cleanedLine ||
+    itemHeaderHints(cleanedLine) ||
+    isItemSummaryLine(cleanedLine)
+  )
+    return null;
+  const normalizedRow = cleanedLine.replace(
+    new RegExp(
+      `\\b(${itemUnitToken})\\.?\\s+(${quantityPattern})(?=\\s+${currencyPattern}\\s*[+-]?\\d)`,
+      "i",
+    ),
+    (_match, unit: string, quantity: string) => `${quantity} ${unit}`,
+  );
+
+  const completeRow = normalizedRow.match(
+    new RegExp(
+      `^(.+)\\s+(${quantityPattern})\\s+${itemUnitPattern}${moneyPattern}\\s+${moneyPattern}$`,
+      "i",
+    ),
+  );
+  if (completeRow)
+    return buildParsedItem(
+      completeRow[1],
+      completeRow[2],
+      completeRow[3],
+      completeRow[4],
+    );
+
+  // Tax, discount or accounting-code columns can sit between rate and amount.
+  const rowWithExtraColumns = normalizedRow.match(
+    new RegExp(
+      `^(.+)\\s+(${quantityPattern})\\s+${itemUnitPattern}${moneyPattern}\\s+(?:\\S+\\s+){1,3}${moneyPattern}$`,
+      "i",
+    ),
+  );
+  if (rowWithExtraColumns)
+    return buildParsedItem(
+      rowWithExtraColumns[1],
+      rowWithExtraColumns[2],
+      rowWithExtraColumns[3],
+      rowWithExtraColumns[4],
+    );
+
+  // Some suppliers put tax or discount codes after the extended amount.
+  const trailingCode =
+    "(?:\\d+(?:[.,]\\d+)?\\s*%|VAT|GST|TAX|EXEMPT|ZERO(?:\\s+RATED)?|T\\d+)";
+  const rowWithTrailingColumns = normalizedRow.match(
+    new RegExp(
+      `^(.+)\\s+(${quantityPattern})\\s+${itemUnitPattern}${moneyPattern}\\s+${moneyPattern}\\s+${trailingCode}(?:\\s+${trailingCode}){0,2}$`,
+      "i",
+    ),
+  );
+  if (rowWithTrailingColumns)
+    return buildParsedItem(
+      rowWithTrailingColumns[1],
+      rowWithTrailingColumns[2],
+      rowWithTrailingColumns[3],
+      rowWithTrailingColumns[4],
+    );
+
+  if (!relaxed) return null;
+
+  const quantityAndAmount = normalizedRow.match(
+    new RegExp(
+      `^(.+)\\s+(${quantityPattern})\\s+${itemUnitPattern}${moneyPattern}$`,
+      "i",
+    ),
+  );
+  if (quantityAndAmount && hints.quantity && hints.amount && !hints.rate)
+    return buildParsedItem(
+      quantityAndAmount[1],
+      quantityAndAmount[2],
+      undefined,
+      quantityAndAmount[3],
+    );
+  if (quantityAndAmount && hints.quantity && hints.rate && !hints.amount)
+    return buildParsedItem(
+      quantityAndAmount[1],
+      quantityAndAmount[2],
+      quantityAndAmount[3],
+    );
+
+  const rateAndAmount = normalizedRow.match(
+    new RegExp(`^(.+)\\s+${moneyPattern}\\s+${moneyPattern}$`, "i"),
+  );
+  if (rateAndAmount && !hints.quantity)
+    return buildParsedItem(
+      rateAndAmount[1],
+      "1",
+      rateAndAmount[2],
+      rateAndAmount[3],
+    );
+
+  const amountOnly = normalizedRow.match(
+    new RegExp(`^(.+)\\s+${moneyPattern}$`, "i"),
+  );
+  if (amountOnly && (!hints.rate || !hints.quantity))
+    return buildParsedItem(
+      amountOnly[1],
+      "1",
+      amountOnly[2],
+      amountOnly[2],
+    );
+
+  return null;
+}
+
+function columnLabel(line: string) {
+  const normalized = line
+    .toLowerCase()
+    .replace(/[|:_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (
+    /^(?:item\s*)?(?:description|details?)$|^(?:item|product|service)$/.test(
+      normalized,
+    )
+  )
+    return "description" as const;
+  if (/^(?:qty|q\s*ty|quantity)$/.test(normalized))
+    return "quantity" as const;
+  if (
+    /^(?:rate|price|cost|unit\s*(?:price|cost|rate|amount)|price\s*each|unitprice)$/.test(
+      normalized,
+    )
+  )
+    return "rate" as const;
+  if (
+    /^(?:amount|total|line\s*total|extended\s*(?:price|amount)|total\s*price)$/.test(
+      normalized,
+    )
+  )
+    return "amount" as const;
+  return undefined;
+}
+
+function standaloneQuantity(line: string) {
+  const match = line.trim().match(
+    new RegExp(
+      `^(${quantityPattern})(?:\\s+(?:ea(?:ch)?|pcs?|pieces?|units?|unit|nos?|sets?|cases?|dozen|kg|g|lb|lbs|hours?|hrs?|days?|boxes?|packs?|litres?|liters?|ltr|metres?|meters?)\\.?)?$`,
+      "i",
+    ),
+  );
+  return match?.[1];
+}
+
+function standaloneMoney(line: string) {
+  const match = line.trim().match(new RegExp(`^${moneyPattern}$`, "i"));
+  return match?.[1];
+}
+
+function extractColumnMajorItems(lines: string[]) {
+  for (
+    let descriptionIndex = 0;
+    descriptionIndex < lines.length;
+    descriptionIndex += 1
+  ) {
+    if (columnLabel(lines[descriptionIndex]) !== "description") continue;
+    const amountIndex = lines.findIndex(
+      (line, index) =>
+        index > descriptionIndex && columnLabel(line) === "amount",
+    );
+    if (amountIndex < 0) continue;
+    const foundRateIndex = lines.findIndex(
+      (line, index) =>
+        index > descriptionIndex && columnLabel(line) === "rate",
+    );
+    const rateIndex =
+      foundRateIndex >= 0 && foundRateIndex < amountIndex
+        ? foundRateIndex
+        : -1;
+    const foundQuantityIndex = lines.findIndex(
+      (line, index) =>
+        index > descriptionIndex && columnLabel(line) === "quantity",
+    );
+    const firstValueColumn = rateIndex >= 0 ? rateIndex : amountIndex;
+    const quantityIndex =
+      foundQuantityIndex >= 0 && foundQuantityIndex < firstValueColumn
+        ? foundQuantityIndex
+        : -1;
+    const descriptionEnd =
+      quantityIndex >= 0 ? quantityIndex : firstValueColumn;
+    const endIndex = lines.findIndex(
+      (line, index) => index > amountIndex && isItemSummaryLine(line),
+    );
+    const descriptions = lines
+      .slice(descriptionIndex + 1, descriptionEnd)
+      .filter((line) => !columnLabel(line) && /[\p{L}]/u.test(line));
+    const quantities =
+      quantityIndex >= 0
+        ? lines
+            .slice(quantityIndex + 1, firstValueColumn)
+            .map(standaloneQuantity)
+            .filter((value): value is string => Boolean(value))
+        : descriptions.map(() => "1");
+    const rates =
+      rateIndex >= 0
+        ? lines
+            .slice(rateIndex + 1, amountIndex)
+            .map(standaloneMoney)
+            .filter((value): value is string => Boolean(value))
+        : [];
+    const amounts = lines
+      .slice(amountIndex + 1, endIndex >= 0 ? endIndex : lines.length)
+      .map(standaloneMoney)
+      .filter((value): value is string => Boolean(value));
+    if (
+      !descriptions.length ||
+      descriptions.length !== quantities.length ||
+      descriptions.length !== amounts.length ||
+      (rateIndex >= 0 && descriptions.length !== rates.length)
+    )
+      continue;
+    const items = descriptions.map((description, index) =>
+      buildParsedItem(
+        description,
+        quantities[index],
+        rateIndex >= 0 ? rates[index] : undefined,
+        amounts[index],
+      ),
+    );
+    if (items.every((item): item is ParsedInvoiceItem => Boolean(item)))
+      return items;
+  }
+  return [];
+}
+
+function canBufferItemLine(line: string, pending: string[]) {
+  if (line.length > 250 || /^---\s*Page\s+\d+\s*---$/i.test(line)) return false;
+  if (
+    /^(?:invoice|date|due|vendor|supplier|customer|bill\s+to|ship\s+to|po|purchase\s+order)\b.*:/i.test(
+      line,
+    )
+  )
+    return false;
+  return /[\p{L}]/u.test(line) || pending.length > 0;
+}
+
 function extractItems(lines: string[]) {
+  const columnMajor = extractColumnMajorItems(lines);
+  if (columnMajor.length) return columnMajor;
+
   const items: ParsedInvoiceItem[] = [];
   let inItemsSection = false;
+  let hints = emptyItemHints();
+  let pending: string[] = [];
 
   for (const line of lines) {
-    const lower = line.toLowerCase();
-
-    if (
-      lower.includes("description") ||
-      (lower.includes("qty") && lower.includes("amount")) ||
-      (lower.includes("quantity") && lower.includes("amount")) ||
-      (lower.includes("item") && lower.includes("total"))
-    ) {
+    const header = itemHeaderHints(line);
+    if (header) {
       inItemsSection = true;
+      pending = [];
+      hints = {
+        seen: true,
+        quantity: hints.quantity || header.quantity,
+        rate: hints.rate || header.rate,
+        amount: hints.amount || header.amount,
+      };
       continue;
     }
 
-    if (
-      inItemsSection &&
-      /subtotal|sub-total|tax|vat|gst|balance|amount\s+due|grand\s+total|\btotal\b/i.test(
-        line,
-      )
-    ) {
+    if (inItemsSection && isItemSummaryLine(line)) {
+      if (pending.length) {
+        const incomplete = parseItemLine(
+          pending.join(" "),
+          { ...hints, rate: false, amount: true },
+          true,
+        );
+        if (incomplete) items.push(incomplete);
+      }
       inItemsSection = false;
+      pending = [];
+      continue;
     }
 
-    const parsed = parseItemLine(line);
-    if (!parsed) continue;
-
-    if (inItemsSection || parsed.amount >= parsed.price) {
+    const combined = pending.length ? pending.join(" ") + " " + line : line;
+    const parsed = parseItemLine(combined, hints, inItemsSection);
+    if (parsed) {
       items.push(parsed);
+      pending = [];
+      continue;
     }
+
+    if (inItemsSection && canBufferItemLine(line, pending)) {
+      pending.push(line);
+      if (pending.length > 6) pending = pending.slice(-6);
+      continue;
+    }
+
+    const strict = parseItemLine(line);
+    if (strict && strict.amount >= strict.price) items.push(strict);
   }
 
   return items;

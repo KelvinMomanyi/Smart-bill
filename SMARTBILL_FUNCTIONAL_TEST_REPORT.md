@@ -15,11 +15,14 @@ common OCR mistakes such as `S55.89`, `$SS.89`, `§55,89`, `U5D`, `TotaI` and
 `SubtotaI`; names and invoice identifiers are left untouched.
 
 - Real Chromium OCR preserved `$55.89`, invoice identifiers and the `$60.36`
-  total in a generated 500x650 PNG, WebP and two-page PDF. With the recognition
-  files cached, the runs completed in 2.51, 1.73 and 3.72 seconds respectively;
+  total in a generated 500x650 PNG, WebP and two-page PDF. The resulting OCR
+  text produced the expected structured line item with quantity 1, rate $55.89
+  and amount $55.89 in all three formats. With the recognition files cached,
+  the latest runs completed in 1.57, 1.53 and 3.55 seconds respectively;
   Tesseract reported 94% confidence for each result.
-- All 87 automated tests passed, including OCR result selection, worker reuse,
-  cleanup, localized amounts, currency detection and conservative OCR repair.
+- All 95 automated tests passed, including OCR result selection, worker reuse,
+  cleanup, localized amounts, currency detection, conservative OCR repair and
+  common row, wrapped and column-oriented line-item layouts.
 - TypeScript, ESLint and the production Remix/Vite build all passed after the
   implementation.
 

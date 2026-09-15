@@ -13,6 +13,7 @@
     <pre id="results"></pre>
     <script type="module">
       import { processInvoiceInBrowser } from "/app/utils/browserOcr.ts";
+      import { parseInvoiceText } from "/app/utils/parser.server.ts";
       const progress = document.querySelector("#progress");
       const results = document.querySelector("#results");
       function invoiceCanvas() {
@@ -132,10 +133,23 @@
               throw new Error(type + ": invoice number was not recognized");
             if (result.pageCount !== (pdf ? 2 : 1))
               throw new Error(type + ": wrong page count");
+            const parsed = parseInvoiceText(result.rawText);
+            if (
+              parsed.items.length !== 1 ||
+              parsed.items[0].quantity !== 1 ||
+              parsed.items[0].rate !== 55.89 ||
+              parsed.items[0].amount !== 55.89
+            )
+              throw new Error(
+                type +
+                  ": OCR text did not produce the expected line item: " +
+                  JSON.stringify(parsed.items),
+              );
             checks.push({
               type,
               passed: true,
               pageCount: result.pageCount,
+              itemCount: parsed.items.length,
               confidence: Math.round(result.confidence),
               milliseconds: Math.round(performance.now() - start),
             });

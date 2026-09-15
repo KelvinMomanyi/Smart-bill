@@ -117,6 +117,8 @@ Dashboard capture and retries use Tesseract.js 6 in English. The browser reuses 
 
 Fractional quantities are preserved, and identical repeated lines are retained. Numeric dates can follow day/month/year or month/day/year settings.
 
+Line-item extraction supports conventional rows, unit-of-measure and tax/code columns, wrapped OCR lines, tables that provide only rate or amount, and column-oriented OCR output. When a table omits either unit rate or line amount, SmartBill derives it only from the quantity and the detected header structure, then subjects the invoice to the same balance and review checks.
+
 **Business value:** A starting point for review without entering every field from scratch.
 
 ### 5.2 Original document beside editable invoice data

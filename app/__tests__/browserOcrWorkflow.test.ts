@@ -123,6 +123,33 @@ test("browser completion saves the original, parsed fields and review state once
   assert.equal(queuedInvoiceJobWhere(shop, new Date()).status, "QUEUED");
 });
 
+test("browser completion persists line items from non-basic invoice tables", async (t) => {
+  const { invoices } = mockJob(t);
+  await completeBrowserInvoiceJob({
+    ...input,
+    rawText: `Supplier: Test Supplier
+Invoice No: BROWSER-ITEMS-200
+Invoice Date: 2026-09-15
+Item Description | Qty | Unit Price | VAT | Amount
+WGT-3000 Widget 3000 | 2 | EA | $27.945 | 16% | $55.89
+Subtotal $55.89
+Tax $0.00
+Total USD $55.89`,
+  });
+  assert.deepEqual(invoices[0].items.create, [
+    {
+      sku: "WGT-3000",
+      name: "Widget 3000",
+      price: 27.945,
+      quantity: 2,
+      amount: 55.89,
+      shopifyVariantId: undefined,
+      matchedProductTitle: undefined,
+      matchConfirmed: false,
+    },
+  ]);
+});
+
 test("browser OCR retries failed jobs and reconciles interrupted saves without duplicates", async (t) => {
   const { job, invoices } = mockJob(t, "FAILED");
   await completeBrowserInvoiceJob(input);
