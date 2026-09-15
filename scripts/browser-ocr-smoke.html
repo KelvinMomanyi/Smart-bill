@@ -31,10 +31,10 @@
           "Invoice No: SMOKE-1001",
           "Invoice Date: 2026-09-14",
           "Description Qty Rate Amount",
-          "PAPER-10 Printer Paper 2 25.00 50.00",
-          "Subtotal 50.00",
-          "Tax 8.00",
-          "Total USD 58.00",
+          "PAPER-10 Printer Paper 1 $55.89 $55.89",
+          "Subtotal $55.89",
+          "Tax $4.47",
+          "Total USD $60.36",
         ].forEach((line, i) => ctx.fillText(line, 28, 92 + i * 48));
         return canvas;
       }
@@ -45,13 +45,13 @@
             "Supplier: SmartBill PDF Supplies",
             "Invoice Date: 2026-09-14",
             "Description Qty Rate Amount",
-            "Printer Ink 2 30.00 60.00",
+            "Printer Ink 1 $55.89 $55.89",
           ],
           [
             "INVOICE PDF-SMOKE-1002",
-            "Subtotal 60.00",
-            "Tax 9.60",
-            "Total USD 69.60",
+            "Subtotal $55.89",
+            "Tax $4.47",
+            "Total USD $60.36",
           ],
         ].map((lines) =>
           [
@@ -120,9 +120,13 @@
                 type + ": " + update.status + " " + update.progress + "%";
             });
             const pdf = type === "application/pdf";
-            if (!result.rawText.includes(pdf ? "69.60" : "58.00"))
+            if (!result.rawText.includes("60.36"))
               throw new Error(
                 type + ": invoice total was not recognized: " + result.rawText,
+              );
+            if (!result.rawText.includes("$55.89"))
+              throw new Error(
+                type + ": currency symbol or decimal amount was not recognized: " + result.rawText,
               );
             if (!result.rawText.includes(pdf ? "PDF-SMOKE-1002" : "SMOKE-1001"))
               throw new Error(type + ": invoice number was not recognized");
@@ -132,6 +136,7 @@
               type,
               passed: true,
               pageCount: result.pageCount,
+              confidence: Math.round(result.confidence),
               milliseconds: Math.round(performance.now() - start),
             });
             results.textContent = JSON.stringify(checks, null, 2);

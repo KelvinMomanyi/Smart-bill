@@ -207,7 +207,7 @@ export function InvoiceOcrStatus({
       {ocr.preview && (
         <details>
           <summary>
-            OCR preview: {ocr.preview.filename} ({ocr.preview.pageCount} pages)
+            OCR preview: {ocr.preview.filename} ({ocr.preview.pageCount} pages, {Math.round(ocr.preview.confidence)}% recognition confidence)
           </summary>
           {ocr.previewUrl && (
             <img
@@ -225,6 +225,11 @@ export function InvoiceOcrStatus({
               style={{ width: "100%" }}
             />
           </label>
+          <Text as="p" tone="subdued">
+            Confirm currency, decimal amounts, tax and total before approving
+            the invoice. Recognition confidence is a reading aid, not an
+            accounting validation.
+          </Text>
         </details>
       )}
     </BlockStack>

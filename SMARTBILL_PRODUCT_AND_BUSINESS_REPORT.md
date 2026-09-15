@@ -113,7 +113,7 @@ The app does not pay the supplier. The merchant still makes the payment decision
 
 SmartBill accepts supported PDFs and images, and it also allows pasted text. It extracts supplier information, invoice identifiers, dates, currency, tax, totals and line items.
 
-Dashboard capture and retries use the restored browser Tesseract processor in English, with original image sizing, PDF pages rendered at 2x, progress and previews. Server email/API workers retain embedded PDF text extraction, Google Cloud Vision and server Tesseract fallback. Both flows use server-side rules-based invoice parsing. There is no verified basis for advertising universal language support, a guaranteed accuracy percentage, or fully autonomous accounting.
+Dashboard capture and retries use Tesseract.js 6 in English. The browser reuses one worker across pages, auto-rotates images, improves contrast and resolution for small symbols, renders PDF pages at 2x and makes a second sparse-layout reading only when the first result lacks strong invoice and monetary detail. Progress, previews and recognition confidence remain visible. The parser handles common international currency symbols/codes, decimal points, decimal commas and thousands separators, and repairs frequent OCR confusions only inside monetary or invoice-label context. Server email/API workers retain embedded PDF text extraction, Google Cloud Vision and server Tesseract fallback. There is no verified basis for advertising universal language support, a guaranteed accuracy percentage, or fully autonomous accounting.
 
 Fractional quantities are preserved, and identical repeated lines are retained. Numeric dates can follow day/month/year or month/day/year settings.
 

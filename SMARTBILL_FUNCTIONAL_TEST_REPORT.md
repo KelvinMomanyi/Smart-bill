@@ -1,5 +1,28 @@
 # SmartBill Functional Test Report
 
+## OCR accuracy enhancement verified on 15 September 2026
+
+Dashboard OCR now uses Tesseract.js 6.0.1 with one worker per document,
+automatic rotation, bounded upscaling, grayscale contrast cleanup and preserved
+word spacing. A weak first reading receives one color sparse-layout pass, and
+SmartBill keeps the complete reading with the stronger invoice-detail score.
+The capture preview now shows Tesseract's recognition confidence and reminds the
+user to verify currency, tax and totals against the original.
+
+The invoice parser now recognizes common currency symbols and codes, decimal
+points, decimal commas and thousands separators. Monetary-context repairs cover
+common OCR mistakes such as `S55.89`, `$SS.89`, `§55,89`, `U5D`, `TotaI` and
+`SubtotaI`; names and invoice identifiers are left untouched.
+
+- Real Chromium OCR preserved `$55.89`, invoice identifiers and the `$60.36`
+  total in a generated 500x650 PNG, WebP and two-page PDF. With the recognition
+  files cached, the runs completed in 2.51, 1.73 and 3.72 seconds respectively;
+  Tesseract reported 94% confidence for each result.
+- All 87 automated tests passed, including OCR result selection, worker reuse,
+  cleanup, localized amounts, currency detection and conservative OCR repair.
+- TypeScript, ESLint and the production Remix/Vite build all passed after the
+  implementation.
+
 ## OCR restoration verified on 14 September 2026
 
 This update supersedes the earlier OCR/queue descriptions below. Dashboard

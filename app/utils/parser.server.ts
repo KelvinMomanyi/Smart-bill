@@ -28,14 +28,78 @@ export type ParsedInvoice = {
   warnings?: string[];
 };
 
-const currencyPattern = "(?:[$\\u20ac\\u00a3]|KES|USD|EUR|GBP|CAD|AUD)?";
-const moneyPattern = `${currencyPattern}\\s*([+-]?\\d[\\d,]*(?:\\.\\d{1,2})?)`;
+const currencyCodes =
+  "USD|EUR|GBP|CAD|AUD|NZD|KES|ZAR|NGN|GHS|JPY|CNY|INR|AED|UGX|TZS|RWF|BRL|PHP";
+const currencyPattern =
+  `(?:(?:${currencyCodes})|R\\$|KSh|[$\\u20ac\\u00a3\\u00a5\\u20b9\\u20a6\\u20b5\\u20b1])?`;
+const numberPattern =
+  "[+-]?(?:\\d{1,3}(?:[\\s,'’.]\\d{3})+(?:[.,]\\d{1,4})?|\\d+(?:[.,]\\d{1,4})?)";
+const moneyPattern = `${currencyPattern}\\s*(${numberPattern})`;
+
+function normalizeOcrDigits(value: string) {
+  return value.replace(/[Oo]/g, "0").replace(/[Il|]/g, "1").replace(/[Ss]/g, "5");
+}
+
+export function normalizeInvoiceOcrText(text: string) {
+  let normalized = text
+    .normalize("NFKC")
+    .replace(/[\u00a0\u2007\u202f]/g, " ")
+    .replace(/\blnvoice\b/gi, "Invoice")
+    .replace(/\blnv(?=\s*(?:no\.?|number|#))/gi, "Inv")
+    .replace(/\bSubtota[Il|]\b/gi, "Subtotal")
+    .replace(/\bTota[Il|]\b/gi, "Total")
+    .replace(/\bU(?:5|S)(?:D|O)\b/gi, "USD")
+    .replace(/\bKE5\b/gi, "KES")
+    .replace(/\bEUR\b/gi, "EUR")
+    .replace(/\u00a7(?=\s*[\dOIlS])/g, "$")
+    // Tesseract commonly reads a dollar glyph as S immediately before money.
+    .replace(
+      /(?<![$\u20ac\u00a3\u00a5\u20b9\u20a6\u20b5\u20b1])\bS(?=\s*[\dOIlS]+\s*[.,]\s*[\dOIlS]{1,4}\b)/g,
+      "$",
+    );
+
+  const currencyMarker =
+    `(?:${currencyCodes}|R\\$|KSh|[$\\u20ac\\u00a3\\u00a5\\u20b9\\u20a6\\u20b5\\u20b1])`;
+  normalized = normalized.replace(
+    new RegExp(
+      `(${currencyMarker}\\s*)([\\dOIlS][\\dOIlS\\s,'’.]*(?:[.,]\\s*[\\dOIlS]{1,4}))`,
+      "gi",
+    ),
+    (_match, marker: string, amount: string) =>
+      marker + normalizeOcrDigits(amount),
+  );
+
+  // Preserve normal prose and identifiers; only repair digit lookalikes on
+  // lines whose labels make the value unambiguously monetary.
+  normalized = normalized.replace(
+    /^(\s*(?:subtotal|sub-total|tax|vat|gst|grand\s+total|invoice\s+total|total|amount\s+due|balance\s+due)\b.*?)([\dOIlS][\dOIlS\s,'’.]*(?:[.,]\s*[\dOIlS]{1,4}))\s*$/gim,
+    (_match, label: string, amount: string) =>
+      label + normalizeOcrDigits(amount),
+  );
+
+  // OCR may leave spaces around a decimal point or comma ("55 . 89").
+  for (let pass = 0; pass < 2; pass += 1)
+    normalized = normalized.replace(/(\d)\s*([.,])\s*(\d)/g, "$1$2$3");
+  return normalized;
+}
 
 function parseMoney(value?: string | null) {
   if (!value) return undefined;
-  const parsed = Number.parseFloat(
-    value.replace(/[$\u20ac\u00a3,\s]|KES|USD|EUR|GBP|CAD|AUD/gi, ""),
-  );
+  let numeric = value
+    .replace(new RegExp(currencyCodes, "gi"), "")
+    .replace(/R\$|KSh|[\u20ac\u00a3\u00a5\u20b9\u20a6\u20b5\u20b1$]/gi, "")
+    .replace(/[\s'’]/g, "");
+  const lastDot = numeric.lastIndexOf(".");
+  const lastComma = numeric.lastIndexOf(",");
+  const separator = Math.max(lastDot, lastComma);
+  const fractionLength = separator >= 0 ? numeric.length - separator - 1 : 0;
+  if (separator >= 0 && fractionLength > 0 && fractionLength <= 2) {
+    const integer = numeric.slice(0, separator).replace(/[.,]/g, "");
+    numeric = integer + "." + numeric.slice(separator + 1);
+  } else {
+    numeric = numeric.replace(/[.,]/g, "");
+  }
+  const parsed = Number.parseFloat(numeric);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
@@ -91,6 +155,19 @@ function extractCurrency(text: string) {
   if (/\bGBP\b|\u00a3/i.test(text)) return "GBP";
   if (/\bCAD\b/i.test(text)) return "CAD";
   if (/\bAUD\b/i.test(text)) return "AUD";
+  if (/\bNZD\b/i.test(text)) return "NZD";
+  if (/\bZAR\b/i.test(text)) return "ZAR";
+  if (/\bNGN\b|\u20a6/i.test(text)) return "NGN";
+  if (/\bGHS\b|\u20b5/i.test(text)) return "GHS";
+  if (/\bCNY\b/i.test(text)) return "CNY";
+  if (/\bJPY\b|\u00a5/i.test(text)) return "JPY";
+  if (/\bINR\b|\u20b9/i.test(text)) return "INR";
+  if (/\bAED\b/i.test(text)) return "AED";
+  if (/\bUGX\b/i.test(text)) return "UGX";
+  if (/\bTZS\b/i.test(text)) return "TZS";
+  if (/\bRWF\b/i.test(text)) return "RWF";
+  if (/\bBRL\b|R\$/i.test(text)) return "BRL";
+  if (/\bPHP\b|\u20b1/i.test(text)) return "PHP";
   return "USD";
 }
 
@@ -189,7 +266,7 @@ function parseItemLine(line: string): ParsedInvoiceItem | null {
 
   const itemMatch = cleanedLine.match(
     new RegExp(
-      `^(.+?)\\s+(\\d+(?:\\.\\d+)?)\\s+${currencyPattern}\\s*([+-]?\\d[\\d,]*(?:\\.\\d{1,2})?)\\s+${moneyPattern}$`,
+      `^(.+?)\\s+(\\d+(?:[.,]\\d+)?)\\s+${moneyPattern}\\s+${moneyPattern}$`,
       "i",
     ),
   );
@@ -198,9 +275,9 @@ function parseItemLine(line: string): ParsedInvoiceItem | null {
 
   const rawDescription = normalizeItemName(itemMatch[1]);
   const skuMatch = rawDescription.match(/^([A-Z0-9._-]{3,})\s+(.+)$/);
-  const quantity = Number.parseFloat(itemMatch[2]);
-  const rate = parseMoney(itemMatch[3]) || 0;
-  const amount = parseMoney(itemMatch[4]) || quantity * rate;
+  const quantity = Number.parseFloat(itemMatch[2].replace(",", "."));
+  const rate = parseMoney(itemMatch[3]) ?? 0;
+  const amount = parseMoney(itemMatch[4]) ?? quantity * rate;
   const description = skuMatch ? skuMatch[2] : rawDescription;
 
   if (!description || !Number.isFinite(quantity)) return null;
@@ -303,7 +380,8 @@ function findMoneyByLabel(
 }
 
 export function parseInvoiceText(text: string, dateOrder: "DMY" | "MDY" = "DMY"): ParsedInvoice {
-  const lines = text
+  const normalizedText = normalizeInvoiceOcrText(text);
+  const lines = normalizedText
     .split(/\r?\n/)
     .map((line) => line.replace(/\s+/g, " ").trim())
     .filter(Boolean);
@@ -322,8 +400,8 @@ export function parseInvoiceText(text: string, dateOrder: "DMY" | "MDY" = "DMY")
         exclude: /(?:subtotal|sub-total|tax|vat|gst)/i,
         reverse: true,
       },
-    ) ||
-    subtotal ||
+    ) ??
+    subtotal ??
     0;
   const vendor = extractVendor(lines);
 
@@ -333,7 +411,7 @@ export function parseInvoiceText(text: string, dateOrder: "DMY" | "MDY" = "DMY")
     dueDate,
     billTo: extractBillTo(lines),
     vendor,
-    currency: extractCurrency(text),
+    currency: extractCurrency(normalizedText),
     subtotal,
     tax,
     total,
