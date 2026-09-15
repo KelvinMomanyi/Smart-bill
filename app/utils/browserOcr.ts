@@ -283,10 +283,19 @@ export async function processInvoiceInBrowser(
   file: File,
   onProgress: (update: BrowserOcrProgress) => void,
   runtime?: BrowserOcrRuntime,
+  signal?: AbortSignal,
 ): Promise<BrowserOcrResult> {
+  const throwIfAborted = () => {
+    if (!signal?.aborted) return;
+    const error = new Error("Invoice upload was cancelled.");
+    error.name = "AbortError";
+    throw error;
+  };
   const isPdf = validateBrowserOcrFile(file);
+  throwIfAborted();
   onProgress({ status: "Loading OCR engine...", progress: 0 });
   const engine = runtime || (await loadRuntime(isPdf));
+  throwIfAborted();
   const loading = isPdf ? engine.openPdf(await file.arrayBuffer()) : undefined;
   let preview: Blob = file;
   let rawText = "";
@@ -297,8 +306,11 @@ export async function processInvoiceInBrowser(
   let activePassStart = 0;
   let activePassSpan = 0.7;
   const confidences: number[] = [];
+  const stopWorker = () => void worker?.terminate();
+  signal?.addEventListener("abort", stopWorker, { once: true });
   try {
     const pdf = await loading?.promise;
+    throwIfAborted();
     const pageCount = pdf?.numPages || 1;
     activePageCount = pageCount;
     // The original limited processing to five pages. Reject larger documents
@@ -339,12 +351,14 @@ export async function processInvoiceInBrowser(
           });
       },
     });
+    throwIfAborted();
     await worker.setParameters({
       preserve_interword_spaces: "1",
       tessedit_pageseg_mode: "3",
       user_defined_dpi: "300",
     });
     for (let page = 1; page <= pageCount; page++) {
+      throwIfAborted();
       activePage = page;
       activePassStart = 0;
       activePassSpan = 0.7;
@@ -364,6 +378,7 @@ export async function processInvoiceInBrowser(
           if (!context)
             throw new Error("This browser cannot render PDF pages.");
           await pdfPage.render({ canvasContext: context, viewport }).promise;
+          throwIfAborted();
           image = await new Promise<Blob>((resolve, reject) =>
             canvas.toBlob(
               (blob) =>
@@ -393,7 +408,9 @@ export async function processInvoiceInBrowser(
       const primaryImage = engine.prepareImage
         ? await engine.prepareImage(image, true)
         : image;
+      throwIfAborted();
       const primary = await worker.recognize(primaryImage, { rotateAuto: true });
+      throwIfAborted();
       let selected = primary;
 
       // Sparse or low-contrast layouts sometimes lose symbols under automatic
@@ -420,9 +437,11 @@ export async function processInvoiceInBrowser(
           const alternateImage = engine.prepareImage
             ? await engine.prepareImage(image, false)
             : image;
+          throwIfAborted();
           const alternate = await worker.recognize(alternateImage, {
             rotateAuto: true,
           });
+          throwIfAborted();
           if (
             invoiceOcrTextScore(
               alternate.data.text,
@@ -442,6 +461,7 @@ export async function processInvoiceInBrowser(
             .setParameters({ tessedit_pageseg_mode: "3" })
             .catch(() => undefined);
         }
+        throwIfAborted();
       }
       const text = selected.data.text;
       confidences.push(Number(selected.data.confidence || 0));
@@ -467,6 +487,7 @@ export async function processInvoiceInBrowser(
         confidences.length,
     };
   } finally {
+    signal?.removeEventListener("abort", stopWorker);
     await Promise.allSettled([worker?.terminate(), loading?.destroy()]);
   }
 }

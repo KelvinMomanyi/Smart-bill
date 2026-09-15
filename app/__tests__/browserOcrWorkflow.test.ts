@@ -6,7 +6,7 @@ import { queuedInvoiceJobWhere } from "../utils/invoiceJobs";
 // Shopify probes the session table on initialization; keep even that probe local.
 const originalCount = prisma.session.count;
 (prisma.session as any).count = async () => 0;
-const { completeBrowserInvoiceJob } = await import(
+const { completeBrowserInvoiceJob, deleteUploadedInvoiceJob } = await import(
   "../services/invoiceJobs.server"
 );
 const { authenticate } = await import("../shopify.server");
@@ -304,4 +304,157 @@ test("browser upload stores one private original and reserves usage once without
   assert.ok(job.storageKey.startsWith("supabase://ocr-test/invoices/" + shop + "/"));
   assert.equal(stored, 1);
   assert.equal(reserved, 1);
+});
+
+test("deleting an uploaded invoice is shop-scoped, stops processing and releases usage once", async (t) => {
+  const originalEnvironment = {
+    SUPABASE_URL: process.env.SUPABASE_URL,
+    SUPABASE_SECRET_KEY: process.env.SUPABASE_SECRET_KEY,
+    SUPABASE_STORAGE_BUCKET: process.env.SUPABASE_STORAGE_BUCKET,
+  };
+  Object.assign(process.env, {
+    SUPABASE_URL: "https://delete-test.supabase.co",
+    SUPABASE_SECRET_KEY: "sb_secret_fake-delete-test",
+    SUPABASE_STORAGE_BUCKET: "delete-test",
+  });
+  t.after(() => {
+    for (const [key, value] of Object.entries(originalEnvironment)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  const job: any = {
+    id: "delete-job",
+    shop,
+    status: "PROCESSING",
+    invoiceId: null,
+    storageKey:
+      "supabase://delete-test/invoices/browser-test.myshopify.com/invoice.png",
+    documentHash: "delete-document-hash",
+    usageMonth: "2026-09",
+    leaseToken: "active-worker",
+    lockedAt: new Date(),
+  };
+  let rowExists = true;
+  let usageReleases = 0;
+  let storageDeletes = 0;
+
+  t.mock.method(authenticate, "admin", async () => ({
+    session: { shop, id: "owner" },
+    admin: {
+      graphql: async () => {
+        throw new Error("Deletion must not require an active subscription.");
+      },
+    },
+  }));
+
+  replaceMethod(t, prisma, "$transaction", async (callback: any) =>
+    callback(prisma),
+  );
+  replaceMethod(t, prisma, "$queryRaw", async () =>
+    rowExists ? [{ id: job.id }] : [],
+  );
+  replaceMethod(t, prisma.invoiceJob, "findFirst", async ({ where }: any) =>
+    rowExists && where.id === job.id && where.shop === shop ? job : null,
+  );
+  replaceMethod(t, prisma.invoice, "findFirst", async () => null);
+  replaceMethod(t, prisma.invoiceJob, "update", async ({ data }: any) => {
+    Object.assign(job, data);
+    return job;
+  });
+  replaceMethod(t, prisma.monthlyUsage, "updateMany", async () => {
+    usageReleases++;
+    return { count: 1 };
+  });
+  replaceMethod(t, prisma.invoiceJob, "deleteMany", async ({ where }: any) => {
+    if (where.id === job.id && job.status === "CANCELLED") rowExists = false;
+    return { count: rowExists ? 0 : 1 };
+  });
+  replaceMethod(t, prisma.invoiceJob, "updateMany", async ({ data }: any) => {
+    Object.assign(job, data);
+    return { count: 1 };
+  });
+  t.mock.method(globalThis, "fetch", async (url: any, init?: RequestInit) => {
+    const path = new URL(String(url)).pathname;
+    if (path === "/storage/v1/bucket/delete-test")
+      return Response.json({
+        id: "delete-test",
+        name: "delete-test",
+        public: false,
+        file_size_limit: 10 * 1024 * 1024,
+        allowed_mime_types: [
+          "application/pdf",
+          "image/jpeg",
+          "image/png",
+          "image/gif",
+          "image/bmp",
+          "image/webp",
+        ],
+      });
+    assert.equal(init?.method, "DELETE");
+    assert.equal(path, "/storage/v1/object/delete-test");
+    storageDeletes++;
+    if (storageDeletes === 1)
+      return Response.json(
+        { message: "Storage is temporarily unavailable" },
+        { status: 503 },
+      );
+    return Response.json({ message: "Deleted" });
+  });
+
+  await assert.rejects(
+    deleteUploadedInvoiceJob({ shop: "another-shop", jobId: job.id }),
+    /not found/,
+  );
+  await assert.rejects(
+    deleteUploadedInvoiceJob({ shop, jobId: job.id }),
+    /Unable to delete the private invoice document/,
+  );
+  assert.equal(job.status, "CANCELLED");
+  assert.equal(job.leaseToken, null);
+  assert.match(job.error, /Unable to delete/);
+  assert.equal(rowExists, true);
+  assert.equal(usageReleases, 1);
+  const form = new FormData();
+  form.set("intent", "delete-upload");
+  form.set("jobId", job.id);
+  const response = await jobsAction({
+    request: new Request("https://app.example/api/jobs", {
+      method: "POST",
+      body: form,
+    }),
+  } as any);
+  assert.equal(response.status, 200);
+  const deleted = await response.json();
+  assert.ok("success" in deleted);
+  assert.equal(deleted.success, true);
+  assert.equal(rowExists, false);
+  assert.equal(usageReleases, 1);
+  assert.equal(storageDeletes, 2);
+});
+
+test("completed invoice uploads cannot be deleted through processing cleanup", async (t) => {
+  const job = {
+    id: "completed-job",
+    shop,
+    status: "COMPLETED",
+    invoiceId: "invoice-1",
+    documentHash: "completed-hash",
+  };
+  replaceMethod(t, prisma, "$transaction", async (callback: any) =>
+    callback(prisma),
+  );
+  replaceMethod(t, prisma, "$queryRaw", async () => [{ id: job.id }]);
+  replaceMethod(t, prisma.invoiceJob, "findFirst", async () => job);
+  replaceMethod(t, prisma.invoiceJob, "update", async () => {
+    throw new Error("Completed jobs must not be changed");
+  });
+  replaceMethod(t, prisma.monthlyUsage, "updateMany", async () => {
+    throw new Error("Completed usage must not be released");
+  });
+  await assert.rejects(
+    deleteUploadedInvoiceJob({ shop, jobId: job.id }),
+    /already created an invoice/,
+  );
 });

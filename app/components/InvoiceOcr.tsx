@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "@remix-run/react";
-import { Banner, BlockStack, Text } from "@shopify/polaris";
+import { Banner, BlockStack, Button, Text } from "@shopify/polaris";
 import {
   processInvoiceInBrowser,
   validateBrowserOcrFile,
@@ -30,14 +30,26 @@ function jobForm(intent: string, jobId: string) {
   return form;
 }
 
+function throwUploadCancelled(signal: AbortSignal) {
+  if (!signal.aborted) return;
+  const error = new Error("Invoice upload was cancelled.");
+  error.name = "AbortError";
+  throw error;
+}
+
 export function useInvoiceOcr(onSaved: () => void) {
   const running = useRef(false);
+  const controller = useRef<AbortController | null>(null);
+  const activeJob = useRef<{ id: string; filename: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [activeFilename, setActiveFilename] = useState("");
   const [progress, setProgress] = useState<BrowserOcrProgress>({
     status: "",
     progress: 0,
   });
   const [error, setError] = useState("");
+  const [deleted, setDeleted] = useState("");
   const [saved, setSaved] = useState<
     Array<{ filename: string; invoiceId: string }>
   >([]);
@@ -61,11 +73,20 @@ export function useInvoiceOcr(onSaved: () => void) {
     return () => window.removeEventListener("beforeunload", preventClose);
   }, [busy]);
 
-  async function recognizeAndSave(file: File, jobId: string) {
+  async function recognizeAndSave(
+    file: File,
+    jobId: string,
+    signal: AbortSignal,
+  ) {
     try {
-      const result = await processInvoiceInBrowser(file, (value) =>
-        setProgress({ ...value, status: file.name + ": " + value.status }),
+      const result = await processInvoiceInBrowser(
+        file,
+        (value) =>
+          setProgress({ ...value, status: file.name + ": " + value.status }),
+        undefined,
+        signal,
       );
+      throwUploadCancelled(signal);
       setPreview({ ...result, filename: file.name });
       setProgress({
         status: file.name + ": Saving invoice for review...",
@@ -81,6 +102,7 @@ export function useInvoiceOcr(onSaved: () => void) {
       ]);
       onSaved();
     } catch (failure) {
+      if (signal.aborted) throw failure;
       const message =
         failure instanceof Error ? failure.message : "OCR processing failed.";
       const body = jobForm("fail-browser-ocr", jobId);
@@ -90,22 +112,52 @@ export function useInvoiceOcr(onSaved: () => void) {
     }
   }
 
-  async function run(work: () => Promise<void>) {
+  async function run(work: (signal: AbortSignal) => Promise<void>) {
     if (running.current) return;
+    const runController = new AbortController();
     running.current = true;
+    controller.current = runController;
+    activeJob.current = null;
     setBusy(true);
+    setCancelling(false);
     setError("");
+    setDeleted("");
     setSaved([]);
     setPreview(null);
     try {
-      await work();
+      await work(runController.signal);
     } catch (failure) {
-      setError(
-        failure instanceof Error ? failure.message : "OCR processing failed.",
-      );
+      if (runController.signal.aborted) {
+        const job = activeJob.current as {
+          id: string;
+          filename: string;
+        } | null;
+        if (job) {
+          try {
+            await requestJson("/api/jobs", jobForm("delete-upload", job.id));
+            setDeleted(job.filename + " was deleted.");
+          } catch (cleanupFailure) {
+            setError(
+              cleanupFailure instanceof Error
+                ? cleanupFailure.message
+                : "OCR stopped, but the uploaded document could not be deleted.",
+            );
+          }
+        } else {
+          setDeleted("The invoice upload was cancelled.");
+        }
+      } else {
+        setError(
+          failure instanceof Error ? failure.message : "OCR processing failed.",
+        );
+      }
     } finally {
+      controller.current = null;
+      activeJob.current = null;
       running.current = false;
       setBusy(false);
+      setCancelling(false);
+      setActiveFilename("");
       onSaved();
     }
   }
@@ -114,10 +166,12 @@ export function useInvoiceOcr(onSaved: () => void) {
     files: File[],
     metadata: { vendorName: string; purchaseOrderId: string },
   ) {
-    await run(async () => {
+    await run(async (signal) => {
       files.forEach(validateBrowserOcrFile);
       const failures: string[] = [];
       for (const file of files) {
+        throwUploadCancelled(signal);
+        setActiveFilename(file.name);
         try {
           setProgress({
             status: file.name + ": Storing original document...",
@@ -130,20 +184,25 @@ export function useInvoiceOcr(onSaved: () => void) {
           body.set("vendorName", metadata.vendorName);
           body.set("purchaseOrderId", metadata.purchaseOrderId);
           const data = await requestJson("/api/upload-invoice", body);
+          activeJob.current = { id: data.jobId, filename: file.name };
+          throwUploadCancelled(signal);
           if (data.status === "COMPLETED" && data.invoiceId) {
             setSaved((items) => [
               ...items,
               { filename: file.name, invoiceId: data.invoiceId },
             ]);
           } else {
-            await recognizeAndSave(file, data.jobId);
+            await recognizeAndSave(file, data.jobId, signal);
           }
         } catch (failure) {
+          if (signal.aborted) throw failure;
           failures.push(
             file.name +
               ": " +
               (failure instanceof Error ? failure.message : "Capture failed."),
           );
+        } finally {
+          if (!signal.aborted) activeJob.current = null;
         }
       }
       if (failures.length) throw new Error(failures.join(" • "));
@@ -151,24 +210,60 @@ export function useInvoiceOcr(onSaved: () => void) {
   }
 
   async function retry(jobId: string) {
-    await run(async () => {
+    await run(async (signal) => {
+      activeJob.current = { id: jobId, filename: "Uploaded document" };
       setProgress({ status: "Opening original document...", progress: 0 });
-      const document = await requestJson(
-        "/api/jobs/document?jobId=" + encodeURIComponent(jobId),
-      );
-      // The scoped URL expires in 60 seconds and needs no server secret.
-      const response = await fetch(document.url, { credentials: "omit" });
-      if (!response.ok)
-        throw new Error(
-          "Unable to download the original document. Please retry.",
+      try {
+        const document = await requestJson(
+          "/api/jobs/document?jobId=" + encodeURIComponent(jobId),
         );
-      const file = new File([await response.blob()], document.filename, {
-        type: document.contentType,
-      });
-      await recognizeAndSave(file, jobId);
+        activeJob.current = { id: jobId, filename: document.filename };
+        setActiveFilename(document.filename);
+        // The scoped URL expires in 60 seconds and needs no server secret.
+        const response = await fetch(document.url, {
+          credentials: "omit",
+          signal,
+        });
+        if (!response.ok)
+          throw new Error(
+            "Unable to download the original document. Please retry.",
+          );
+        const file = new File([await response.blob()], document.filename, {
+          type: document.contentType,
+        });
+        await recognizeAndSave(file, jobId, signal);
+      } finally {
+        if (!signal.aborted) activeJob.current = null;
+      }
     });
   }
-  return { busy, progress, error, saved, preview, previewUrl, capture, retry };
+
+  function cancel() {
+    if (!controller.current || controller.current.signal.aborted) return;
+    setCancelling(true);
+    setProgress({
+      status: activeFilename
+        ? activeFilename + ": Deleting uploaded document..."
+        : "Deleting uploaded document...",
+      progress: progress.progress,
+    });
+    controller.current.abort();
+  }
+
+  return {
+    busy,
+    cancelling,
+    activeFilename,
+    progress,
+    error,
+    deleted,
+    saved,
+    preview,
+    previewUrl,
+    capture,
+    retry,
+    cancel,
+  };
 }
 
 export function InvoiceOcrStatus({
@@ -190,9 +285,25 @@ export function InvoiceOcrStatus({
           <Text as="p">
             {ocr.progress.progress}% complete. Keep this page open.
           </Text>
+          <Button
+            tone="critical"
+            disabled={ocr.cancelling}
+            loading={ocr.cancelling}
+            onClick={() => {
+              if (
+                window.confirm(
+                  `Delete ${ocr.activeFilename || "this uploaded document"}? Processing will stop and the original file will be removed.`,
+                )
+              )
+                ocr.cancel();
+            }}
+          >
+            Delete upload
+          </Button>
         </div>
       )}
       {ocr.error && <Banner tone="critical">{ocr.error}</Banner>}
+      {ocr.deleted && <Banner tone="success">{ocr.deleted}</Banner>}
       {ocr.saved.length > 0 && (
         <Banner tone="success" title="Invoices saved for review">
           {ocr.saved.map((item, index) => (
