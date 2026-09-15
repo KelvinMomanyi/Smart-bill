@@ -188,7 +188,7 @@ test("browser OCR errors release PDF resources and blank scans are not saved", a
   }
 });
 
-test("weak OCR gets a sparse-layout accuracy pass and keeps the stronger result", async () => {
+test("weak OCR gets an alternate-layout accuracy pass and keeps the stronger result", async () => {
   const mock = fakeRuntime(1, async (call) =>
     call === 1
       ? { data: { text: "lnvoice\nTotaI S55 89", confidence: 54 } }
@@ -211,19 +211,54 @@ test("weak OCR gets a sparse-layout accuracy pass and keeps the stronger result"
   );
   assert.equal(mock.calls.length, 2);
   assert.deepEqual(prepared, [true, false]);
-  assert.ok(mock.parameters.some((value) => value.tessedit_pageseg_mode === "11"));
+  assert.ok(mock.parameters.some((value) => value.tessedit_pageseg_mode === "6"));
   assert.match(result.rawText, /\$55\.89/);
   assert.equal(result.confidence, 88);
 });
 
+test("OCR uses a sparse pass when dense layouts still lose the decimal", async () => {
+  const mock = fakeRuntime(1, async (call) => {
+    if (call === 3)
+      return {
+        data: {
+          text: "Invoice INV-906\nDate 2026-09-15\nTotal USD $9.06",
+          confidence: 78,
+        },
+      };
+    return {
+      data: {
+        text: "Invoice INV-906\nDate 2026-09-15\nTotal USD $906",
+        confidence: 84,
+      },
+    };
+  });
+  const prepared: boolean[] = [];
+  mock.runtime.prepareImage = async (image, monochrome) => {
+    prepared.push(monochrome);
+    return image;
+  };
+
+  const result = await processInvoiceInBrowser(
+    new File(["image"], "invoice.png", { type: "image/png" }),
+    () => {},
+    mock.runtime,
+  );
+
+  assert.equal(mock.calls.length, 3);
+  assert.deepEqual(prepared, [true, false, true]);
+  assert.ok(mock.parameters.some((value) => value.tessedit_pageseg_mode === "6"));
+  assert.ok(mock.parameters.some((value) => value.tessedit_pageseg_mode === "11"));
+  assert.match(result.rawText, /\$9\.06/);
+});
+
 test("OCR sizing and quality scoring favor readable invoice amounts", () => {
   assert.deepEqual(browserOcrImageDimensions(700, 1000), {
-    width: 1400,
-    height: 2000,
+    width: 1800,
+    height: 2571,
   });
   assert.deepEqual(browserOcrImageDimensions(4000, 2000), {
-    width: 3000,
-    height: 1500,
+    width: 3600,
+    height: 1800,
   });
   assert.equal(needsOcrAccuracyPass("Invoice\nTotal USD $55.89", 85), false);
   assert.equal(needsOcrAccuracyPass("Invoice\nTotal 55 89", 85), true);

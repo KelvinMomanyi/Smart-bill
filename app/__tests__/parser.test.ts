@@ -313,3 +313,76 @@ test("parseInvoiceText reconstructs columns when quantity is omitted", () => {
     ],
   );
 });
+
+test("parseInvoiceText restores missing decimal points when totals prove the scale", () => {
+  const parsed = parseInvoiceText(`
+    Supplier: Decimal Supply
+    Invoice No: DEC-906
+    Date: 2026-09-15
+    Description Qty Rate Amount
+    Service charge 1 906 906
+    Subtotal $9.06
+    Total USD $9.06
+  `);
+
+  assert.equal(parsed.items.length, 1);
+  assert.equal(parsed.items[0].rate, 9.06);
+  assert.equal(parsed.items[0].amount, 9.06);
+  assert.equal(parsed.subtotal, 9.06);
+  assert.equal(parsed.total, 9.06);
+  assert.ok(parsed.warnings?.some((warning) => /decimal separator/i.test(warning)));
+});
+
+test("parseInvoiceText restores missing decimals in quantity and rate arithmetic", () => {
+  const parsed = parseInvoiceText(`
+    Invoice No: DEC-2
+    Date: 2026-09-15
+    Description Qty Rate Amount
+    Small component 2 453 906
+    Subtotal $9.06
+    Total USD $9.06
+  `);
+
+  assert.equal(parsed.items[0].rate, 4.53);
+  assert.equal(parsed.items[0].amount, 9.06);
+});
+
+test("parseInvoiceText repairs summary decimals using printed line amounts", () => {
+  const parsed = parseInvoiceText(`
+    Invoice No: DEC-3
+    Date: 2026-09-15
+    Description Qty Rate Amount
+    Service charge 1 $9.06 $9.06
+    Subtotal 906
+    Total USD 906
+  `);
+
+  assert.equal(parsed.subtotal, 9.06);
+  assert.equal(parsed.total, 9.06);
+  assert.equal(parsed.items[0].amount, 9.06);
+});
+
+test("parseInvoiceText keeps internally consistent integer amounts unchanged", () => {
+  const parsed = parseInvoiceText(`
+    Invoice No: INT-906
+    Date: 2026-09-15
+    Description Qty Rate Amount
+    Equipment 1 906 906
+    Subtotal 906
+    Total USD 906
+  `);
+
+  assert.equal(parsed.subtotal, 906);
+  assert.equal(parsed.total, 906);
+  assert.equal(parsed.items[0].rate, 906);
+  assert.equal(parsed.items[0].amount, 906);
+  assert.equal(parsed.warnings?.some((warning) => /decimal separator/i.test(warning)), false);
+});
+
+test("OCR normalization restores a decimal point read as whitespace", () => {
+  const normalized = normalizeInvoiceOcrText(
+    "Invoice No: SPACE-1\nDate: 2026-09-15\nTotal USD $9 06",
+  );
+  assert.match(normalized, /\$9\.06/);
+  assert.equal(parseInvoiceText(normalized).total, 9.06);
+});

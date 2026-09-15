@@ -282,12 +282,12 @@ test("production OCR selects Google only when server credentials are available",
 });
 test("OCR preprocessing keeps small invoices readable without oversized rasters", () => {
   assert.deepEqual(ocrImageDimensions(500, 650), {
-    width: 1400,
-    height: 1820,
+    width: 1800,
+    height: 2340,
   });
   assert.deepEqual(ocrImageDimensions(5000, 4000), {
-    width: 2800,
-    height: 2240,
+    width: 3600,
+    height: 2880,
   });
   assert.throws(() => ocrImageDimensions(0, 650), /positive numbers/);
 });

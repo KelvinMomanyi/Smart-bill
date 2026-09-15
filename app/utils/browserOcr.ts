@@ -3,8 +3,8 @@ import { MAX_FILE_BYTES } from "./plans";
 // Match the working processor in old/app/components/InvoiceUpload.tsx.
 export const BROWSER_OCR_MAX_PAGES = 5;
 export const BROWSER_PDF_SCALE = 2;
-export const BROWSER_OCR_MIN_WIDTH = 1400;
-export const BROWSER_OCR_MAX_EDGE = 3000;
+export const BROWSER_OCR_MIN_WIDTH = 1800;
+export const BROWSER_OCR_MAX_EDGE = 3600;
 export const BROWSER_OCR_SCRIPTS = {
   tesseract:
     "https://cdn.jsdelivr.net/npm/tesseract.js@6.0.1/dist/tesseract.min.js",
@@ -167,8 +167,10 @@ function enhanceInvoiceCanvas(canvas: HTMLCanvasElement, monochrome: boolean) {
     const blue = pixels[index + 2] * alpha + 255 * (1 - alpha);
     const luma = 0.299 * red + 0.587 * green + 0.114 * blue;
     const normalized = ((luma - low) / spread) * 255;
-    const contrasted = clampChannel(128 + (normalized - 128) * 1.12);
-    const cleaned = contrasted > 248 ? 255 : contrasted < 12 ? 0 : contrasted;
+    // Keep small, light punctuation pixels. Aggressive white/black clipping can
+    // erase a decimal point while leaving the surrounding digits readable.
+    const contrasted = clampChannel(128 + (normalized - 128) * 1.08);
+    const cleaned = contrasted > 253 ? 255 : contrasted < 8 ? 0 : contrasted;
     pixels[index] = cleaned;
     pixels[index + 1] = cleaned;
     pixels[index + 2] = cleaned;
@@ -227,7 +229,7 @@ export function invoiceOcrTextScore(text: string, confidence = 0) {
   return (
     Math.max(0, confidence) * 3 +
     labels * 100 +
-    Math.min(decimalAmounts, 12) * 35 +
+    Math.min(decimalAmounts, 12) * 90 +
     (currency ? 100 : 0) +
     Math.min(text.trim().length, 2000) * 0.1
   );
@@ -396,8 +398,9 @@ export async function processInvoiceInBrowser(
       const primary = await worker.recognize(primaryImage, { rotateAuto: true });
       let selected = primary;
 
-      // Sparse or low-contrast layouts sometimes lose symbols under automatic
-      // segmentation. Retry only weak results, keeping the better complete read.
+      // Dense tables and sparse layouts segment punctuation differently. Retry
+      // only weak results and score every complete read so a version that keeps
+      // decimal amounts wins over one that merges the same digits.
       if (
         needsOcrAccuracyPass(
           primary.data.text,
@@ -405,7 +408,7 @@ export async function processInvoiceInBrowser(
         )
       ) {
         activePassStart = 0.7;
-        activePassSpan = 0.3;
+        activePassSpan = 0.15;
         activeStatus = pdf
           ? "Improving details on page " + page + " of " + pageCount + "..."
           : "Improving currency and number accuracy...";
@@ -416,7 +419,7 @@ export async function processInvoiceInBrowser(
           ),
         });
         try {
-          await worker.setParameters({ tessedit_pageseg_mode: "11" });
+          await worker.setParameters({ tessedit_pageseg_mode: "6" });
           const alternateImage = engine.prepareImage
             ? await engine.prepareImage(image, false)
             : image;
@@ -437,10 +440,54 @@ export async function processInvoiceInBrowser(
         } catch {
           // The primary reading remains usable if the optional accuracy pass
           // cannot run on a particular browser or image.
-        } finally {
+        }
+
+        if (
+          needsOcrAccuracyPass(
+            selected.data.text,
+            Number(selected.data.confidence || 0),
+          )
+        ) {
+          activePassStart = 0.85;
+          activePassSpan = 0.15;
+          activeStatus = pdf
+            ? "Recovering small numbers on page " + page + " of " + pageCount + "..."
+            : "Recovering decimal points and small symbols...";
+          onProgress({
+            status: activeStatus,
+            progress: Math.round(
+              ((page - 1 + activePassStart) / pageCount) * 100,
+            ),
+          });
+          try {
+            await worker.setParameters({ tessedit_pageseg_mode: "11" });
+            const sparseImage = engine.prepareImage
+              ? await engine.prepareImage(image, true)
+              : image;
+            const sparse = await worker.recognize(sparseImage, {
+              rotateAuto: true,
+            });
+            if (
+              invoiceOcrTextScore(
+                sparse.data.text,
+                Number(sparse.data.confidence || 0),
+              ) >
+              invoiceOcrTextScore(
+                selected.data.text,
+                Number(selected.data.confidence || 0),
+              )
+            )
+              selected = sparse;
+          } catch {
+            // Keep the strongest earlier result when sparse recognition fails.
+          }
+        }
+
+        try {
           await worker
-            .setParameters({ tessedit_pageseg_mode: "3" })
-            .catch(() => undefined);
+            .setParameters({ tessedit_pageseg_mode: "3" });
+        } catch {
+          // The worker is terminated below even if its optional reset fails.
         }
       }
       const text = selected.data.text;

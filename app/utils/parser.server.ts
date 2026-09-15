@@ -14,6 +14,13 @@ export type ParsedInvoiceItem = {
   confidence?: number;
 };
 
+type ParsedInvoiceItemWithSource = ParsedInvoiceItem & {
+  // Kept only while parsing so a missing OCR decimal can be repaired without
+  // mistaking a correctly printed value such as "10.00" for the integer 10.
+  _rawRate?: string;
+  _rawAmount?: string;
+};
+
 export type ParsedInvoice = {
   invoiceNumber?: string;
   date: string;
@@ -75,6 +82,18 @@ export function normalizeInvoiceOcrText(text: string) {
     /^(\s*(?:subtotal|sub-total|tax|vat|gst|grand\s+total|invoice\s+total|total|amount\s+due|balance\s+due)\b.*?)([\dOIlS][\dOIlS\s,'’.]*(?:[.,]\s*[\dOIlS]{1,4}))\s*$/gim,
     (_match, label: string, amount: string) =>
       label + normalizeOcrDigits(amount),
+  );
+
+  // A faint decimal point can be recognized as whitespace. Restore it only
+  // where a currency marker or a monetary summary label makes the two-digit
+  // suffix unambiguous ("$9 06" and "Total 9 06").
+  normalized = normalized.replace(
+    new RegExp(`(${currencyMarker}\\s*[+-]?\\d{1,9})\\s+(\\d{2})(?=\\s|$)`, "gi"),
+    "$1.$2",
+  );
+  normalized = normalized.replace(
+    /^(\s*(?:subtotal|sub-total|tax|vat|gst|grand\s+total|invoice\s+total|total|amount\s+due|balance\s+due)\b.*?\d{1,9})\s+(\d{2})\s*$/gim,
+    "$1.$2",
   );
 
   // OCR may leave spaces around a decimal point or comma ("55 . 89").
@@ -326,7 +345,7 @@ function buildParsedItem(
   rawQuantity: string,
   rawRate: string | undefined,
   rawAmount?: string,
-): ParsedInvoiceItem | null {
+): ParsedInvoiceItemWithSource | null {
   const itemName = normalizeItemName(rawDescription);
   const skuMatch = itemName.match(/^([A-Z0-9._/-]{3,})\s+(.+)$/);
   const quantity = Number.parseFloat(rawQuantity.replace(",", "."));
@@ -390,6 +409,8 @@ function buildParsedItem(
     rate,
     price: rate,
     amount,
+    _rawRate: rawRate,
+    _rawAmount: rawAmount,
   };
 }
 
@@ -397,7 +418,7 @@ function parseItemLine(
   line: string,
   hints: ItemColumnHints = emptyItemHints(),
   relaxed = false,
-): ParsedInvoiceItem | null {
+): ParsedInvoiceItemWithSource | null {
   const cleanedLine = line
     .replace(/[|]+/g, " ")
     .replace(/\s{2,}/g, " ")
@@ -623,7 +644,7 @@ function extractColumnMajorItems(lines: string[]) {
         amounts[index],
       ),
     );
-    if (items.every((item): item is ParsedInvoiceItem => Boolean(item)))
+    if (items.every((item): item is ParsedInvoiceItemWithSource => Boolean(item)))
       return items;
   }
   return [];
@@ -644,7 +665,7 @@ function extractItems(lines: string[]) {
   const columnMajor = extractColumnMajorItems(lines);
   if (columnMajor.length) return columnMajor;
 
-  const items: ParsedInvoiceItem[] = [];
+  const items: ParsedInvoiceItemWithSource[] = [];
   let inItemsSection = false;
   let hints = emptyItemHints();
   let pending: string[] = [];
@@ -726,12 +747,18 @@ function findInvoiceDate(lines: string[], dateOrder: "DMY" | "MDY") {
   );
 }
 
-function findMoneyOnLine(line?: string) {
+type ParsedMoneySource = {
+  raw: string;
+  value: number;
+};
+
+function findMoneyOnLine(line?: string): ParsedMoneySource | undefined {
   if (!line) return undefined;
 
   const matches = [...line.matchAll(new RegExp(moneyPattern, "gi"))];
-  const lastMatch = matches.at(-1);
-  return parseMoney(lastMatch?.[1]);
+  const raw = matches.at(-1)?.[1];
+  const value = parseMoney(raw);
+  return raw && value != null ? { raw, value } : undefined;
 }
 
 function findMoneyByLabel(
@@ -747,6 +774,240 @@ function findMoneyByLabel(
   return findMoneyOnLine(line);
 }
 
+function roundParsedMoney(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function moneyDifference(left: number, right: number) {
+  return Math.abs(roundParsedMoney(left) - roundParsedMoney(right));
+}
+
+function canRestoreDecimal(raw: string | undefined, value: number) {
+  if (!raw || !Number.isInteger(value) || Math.abs(value) < 10) return false;
+  const compact = raw.replace(/[^\d.,+\s'\u2019-]/g, "");
+  return (
+    !/[.,\s'\u2019]/.test(compact) &&
+    /^[+-]?\d{2,}$/.test(compact)
+  );
+}
+
+function restoredDecimal(value: number) {
+  return Math.round((value / 100 + Number.EPSILON) * 1_000_000) / 1_000_000;
+}
+
+function closestPlausibleItemTotal(
+  items: ParsedInvoiceItemWithSource[],
+  target: number,
+) {
+  let totals = [0];
+  for (const item of items) {
+    const amounts = [item.amount];
+    const amountCanShift = canRestoreDecimal(item._rawAmount, item.amount);
+    const derivedFromRate =
+      !item._rawAmount && canRestoreDecimal(item._rawRate, item.rate);
+    if (amountCanShift || derivedFromRate)
+      amounts.push(restoredDecimal(item.amount));
+    totals = [...new Set(totals.flatMap((total) => amounts.map((amount) =>
+      roundParsedMoney(total + amount),
+    )))]
+      .sort(
+        (left, right) =>
+          moneyDifference(left, target) - moneyDifference(right, target),
+      )
+      .slice(0, 128);
+  }
+  return totals.length
+    ? Math.min(...totals.map((total) => moneyDifference(total, target)))
+    : Number.POSITIVE_INFINITY;
+}
+
+type SummaryCandidate = {
+  subtotal?: number;
+  tax?: number;
+  total?: number;
+  changes: number;
+  error: number;
+  constraints: number;
+};
+
+function summaryMoneyOptions(source?: ParsedMoneySource) {
+  if (!source)
+    return [{ value: undefined, shifted: false }] as const;
+  const options = [{ value: source.value, shifted: false }];
+  if (canRestoreDecimal(source.raw, source.value))
+    options.push({ value: restoredDecimal(source.value), shifted: true });
+  return options;
+}
+
+function repairSummaryDecimals(
+  subtotalSource: ParsedMoneySource | undefined,
+  taxSource: ParsedMoneySource | undefined,
+  totalSource: ParsedMoneySource | undefined,
+  items: ParsedInvoiceItemWithSource[],
+) {
+  const candidates: SummaryCandidate[] = [];
+  for (const subtotal of summaryMoneyOptions(subtotalSource))
+    for (const tax of summaryMoneyOptions(taxSource))
+      for (const total of summaryMoneyOptions(totalSource)) {
+        let error = 0;
+        let constraints = 0;
+        if (subtotal.value != null && total.value != null) {
+          error += moneyDifference(
+            subtotal.value + (tax.value ?? 0),
+            total.value,
+          );
+          constraints += 1;
+        }
+        if (items.length && subtotal.value != null) {
+          error += closestPlausibleItemTotal(items, subtotal.value);
+          constraints += 1;
+        } else if (items.length && total.value != null) {
+          error += closestPlausibleItemTotal(
+            items,
+            total.value - (tax.value ?? 0),
+          );
+          constraints += 1;
+        }
+        candidates.push({
+          subtotal: subtotal.value,
+          tax: tax.value,
+          total: total.value,
+          changes:
+            Number(subtotal.shifted) +
+            Number(tax.shifted) +
+            Number(total.shifted),
+          error,
+          constraints,
+        });
+      }
+
+  const baseline = candidates[0];
+  const best = [...candidates].sort(
+    (left, right) => left.error - right.error || left.changes - right.changes,
+  )[0];
+  const tolerance = Math.max(0.011, best.constraints * 0.011);
+  const corrected =
+    best.changes > 0 &&
+    best.constraints > 0 &&
+    best.error <= tolerance &&
+    baseline.error > tolerance;
+  return corrected ? { ...best, corrected } : { ...baseline, corrected: false };
+}
+
+function itemDecimalVariants(item: ParsedInvoiceItemWithSource) {
+  const rateCanShift = canRestoreDecimal(item._rawRate, item.rate);
+  const amountCanShift = canRestoreDecimal(item._rawAmount, item.amount);
+  const flags: Array<[boolean, boolean]> = [[false, false]];
+
+  if (rateCanShift)
+    flags.push(item._rawAmount ? [true, false] : [true, true]);
+  if (amountCanShift)
+    flags.push(item._rawRate ? [false, true] : [true, true]);
+  if (rateCanShift && amountCanShift) flags.push([true, true]);
+
+  const seen = new Set<string>();
+  return flags.flatMap(([shiftRate, shiftAmount]) => {
+    const rate = shiftRate ? restoredDecimal(item.rate) : item.rate;
+    const amount = shiftAmount ? restoredDecimal(item.amount) : item.amount;
+    const key = `${rate}|${amount}`;
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [{
+      item: { ...item, rate, price: rate, amount },
+      changes: Number(shiftRate) + Number(shiftAmount),
+      lineError: moneyDifference(item.quantity * rate, amount),
+    }];
+  });
+}
+
+function repairItemDecimals(
+  items: ParsedInvoiceItemWithSource[],
+  target: number | undefined,
+  trustedTarget: boolean,
+) {
+  if (!items.length) return { items, corrected: false };
+
+  if (!trustedTarget || target == null || target < 0) {
+    let corrected = false;
+    const locallyRepaired = items.map((item) => {
+      const variants = itemDecimalVariants(item).sort(
+        (left, right) =>
+          left.lineError - right.lineError || left.changes - right.changes,
+      );
+      const baseline = variants.find((variant) => variant.changes === 0)!;
+      const best = variants[0];
+      if (
+        best.changes > 0 &&
+        best.lineError <= 0.011 &&
+        baseline.lineError > 0.011
+      ) {
+        corrected = true;
+        return best.item;
+      }
+      return item;
+    });
+    return { items: locallyRepaired, corrected };
+  }
+
+  type BeamState = {
+    items: ParsedInvoiceItemWithSource[];
+    total: number;
+    lineError: number;
+    changes: number;
+  };
+  let states: BeamState[] = [{ items: [], total: 0, lineError: 0, changes: 0 }];
+  for (const item of items) {
+    const next = states.flatMap((state) =>
+      itemDecimalVariants(item).map((variant) => ({
+        items: [...state.items, variant.item],
+        total: roundParsedMoney(state.total + variant.item.amount),
+        lineError: state.lineError + variant.lineError,
+        changes: state.changes + variant.changes,
+      })),
+    );
+    const seen = new Set<string>();
+    states = next
+      .sort(
+        (left, right) =>
+          left.lineError * 4 + moneyDifference(left.total, target) * 8 -
+            (right.lineError * 4 + moneyDifference(right.total, target) * 8) ||
+          left.changes - right.changes,
+      )
+      .filter((state) => {
+        const key = `${state.total}|${roundParsedMoney(state.lineError)}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(0, 256);
+  }
+
+  const baseline = states.find((state) => state.changes === 0);
+  const best = [...states].sort(
+    (left, right) =>
+      left.lineError * 4 + moneyDifference(left.total, target) * 8 -
+        (right.lineError * 4 + moneyDifference(right.total, target) * 8) ||
+      left.changes - right.changes,
+  )[0];
+  const baselineMismatch =
+    !baseline ||
+    baseline.lineError > 0.011 ||
+    moneyDifference(baseline.total, target) > 0.011;
+  const corrected =
+    best.changes > 0 &&
+    baselineMismatch &&
+    best.items.every(
+      (item) => moneyDifference(item.quantity * item.rate, item.amount) <= 0.011,
+    ) &&
+    moneyDifference(best.total, target) <= 0.011;
+  return corrected ? { items: best.items, corrected } : { items, corrected: false };
+}
+
+function withoutItemSource(item: ParsedInvoiceItemWithSource): ParsedInvoiceItem {
+  const { _rawRate: _ignoredRate, _rawAmount: _ignoredAmount, ...parsed } = item;
+  return parsed;
+}
+
 export function parseInvoiceText(text: string, dateOrder: "DMY" | "MDY" = "DMY"): ParsedInvoice {
   const normalizedText = normalizeInvoiceOcrText(text);
   const lines = normalizedText
@@ -758,20 +1019,44 @@ export function parseInvoiceText(text: string, dateOrder: "DMY" | "MDY" = "DMY")
     findValue(lines, [/(?:due\s+date|payment\s+due)\s*:?\s*(.+)$/i]), dateOrder,
   );
   const date = findInvoiceDate(lines, dateOrder);
-  const subtotal = findMoneyByLabel(lines, /(?:subtotal|sub-total)\b/i);
-  const tax = findMoneyByLabel(lines, /\b(?:tax|vat|gst)\b/i);
-  const total =
-    findMoneyByLabel(
-      lines,
-      /(?:amount\s+due|grand\s+total|balance\s+due|invoice\s+total|\btotal\b)/i,
-      {
-        exclude: /(?:subtotal|sub-total|tax|vat|gst)/i,
-        reverse: true,
-      },
-    ) ??
-    subtotal ??
-    0;
+  const subtotalSource = findMoneyByLabel(lines, /(?:subtotal|sub-total)\b/i);
+  const taxSource = findMoneyByLabel(lines, /\b(?:tax|vat|gst)\b/i);
+  const totalSource = findMoneyByLabel(
+    lines,
+    /(?:amount\s+due|grand\s+total|balance\s+due|invoice\s+total|\btotal\b)/i,
+    {
+      exclude: /(?:subtotal|sub-total|tax|vat|gst)/i,
+      reverse: true,
+    },
+  );
+  const sourceItems = extractItems(lines);
+  const summary = repairSummaryDecimals(
+    subtotalSource,
+    taxSource,
+    totalSource,
+    sourceItems,
+  );
+  const subtotal = summary.subtotal;
+  const tax = summary.tax;
+  const total = summary.total ?? subtotal ?? 0;
+  const itemTarget = subtotal ?? (summary.total != null ? total - (tax ?? 0) : undefined);
+  const targetSource = subtotalSource ?? totalSource;
+  const trustedItemTarget =
+    summary.corrected || Boolean(targetSource && /[.,]/.test(targetSource.raw));
+  const repairedItems = repairItemDecimals(
+    sourceItems,
+    itemTarget,
+    trustedItemTarget,
+  );
+  const decimalCorrected = summary.corrected || repairedItems.corrected;
   const vendor = extractVendor(lines);
+  const warnings = date
+    ? []
+    : ["Invoice date was missing or invalid; confirm the date before approval."];
+  if (decimalCorrected)
+    warnings.push(
+      "OCR omitted a decimal separator in one or more amounts. SmartBill restored it using the invoice arithmetic; confirm the corrected values before approval.",
+    );
 
   return {
     invoiceNumber: findInvoiceNumber(lines),
@@ -783,7 +1068,7 @@ export function parseInvoiceText(text: string, dateOrder: "DMY" | "MDY" = "DMY")
     subtotal,
     tax,
     total,
-    items: extractItems(lines),
-    warnings: date ? [] : ["Invoice date was missing or invalid; confirm the date before approval."],
+    items: repairedItems.items.map(withoutItemSource),
+    warnings,
   };
 }

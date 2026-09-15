@@ -54,8 +54,8 @@ type ExtractTextOptions = {
 };
 
 const PDF_RENDER_DPI = 220;
-const MIN_OCR_WIDTH = 1400;
-const MAX_OCR_EDGE = 2800;
+const MIN_OCR_WIDTH = 1800;
+const MAX_OCR_EDGE = 3600;
 const DEFAULT_MAX_PDF_PAGES = MAX_PDF_PAGES;
 const MIN_MEANINGFUL_TEXT_LENGTH = 24;
 const GOOGLE_PDF_PAGE_BATCH = 5;
@@ -366,8 +366,10 @@ function normalizeCanvasForOcr(canvas: Canvas) {
     const blue = pixels[index + 2] * alpha + 255 * (1 - alpha);
     const luma = 0.299 * red + 0.587 * green + 0.114 * blue;
     const normalized = clamp(((luma - low) / spread) * 255);
-    const contrasted = clamp(128 + (normalized - 128) * 1.18);
-    const cleaned = contrasted > 246 ? 255 : contrasted < 18 ? 0 : contrasted;
+    // Preserve faint punctuation, especially decimal points, while still
+    // normalizing uneven scan backgrounds for Tesseract.
+    const contrasted = clamp(128 + (normalized - 128) * 1.08);
+    const cleaned = contrasted > 253 ? 255 : contrasted < 8 ? 0 : contrasted;
 
     pixels[index] = cleaned;
     pixels[index + 1] = cleaned;
