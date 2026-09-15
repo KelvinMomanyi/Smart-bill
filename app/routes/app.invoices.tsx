@@ -4,6 +4,7 @@ import {
   Page,
   Card,
   BlockStack,
+  Banner,
   Text,
   DataTable,
   Button,
@@ -22,6 +23,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   );
   const search = (url.searchParams.get("q") || "").slice(0, 100);
   const status = url.searchParams.get("status") || "";
+  const deleted = url.searchParams.get("deleted") === "1";
   const where = {
     shop: session.shop,
     ...(search
@@ -53,7 +55,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     prisma.invoice.count({ where }),
     getUserRole(request),
   ]);
-  return json({ invoices, count, page, search, status, role });
+  return json({ invoices, count, page, search, status, role, deleted });
 }
 export default function InvoiceQueue() {
   const data = useLoaderData<typeof loader>();
@@ -67,6 +69,11 @@ export default function InvoiceQueue() {
       subtitle="Open an invoice to inspect the original, correct its lines and approve it."
     >
       <BlockStack gap="400">
+        {data.deleted && (
+          <Banner tone="success">
+            The invoice and all of its local data were deleted.
+          </Banner>
+        )}
         <Card>
           <Form method="get">
             <InlineStack gap="300">

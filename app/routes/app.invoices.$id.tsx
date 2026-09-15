@@ -1,5 +1,6 @@
 import {
   json,
+  redirect,
   type LoaderFunctionArgs,
   type ActionFunctionArgs,
 } from "@remix-run/node";
@@ -43,6 +44,8 @@ import { formatMoney } from "../utils/format";
 import type { loader as productLoader } from "./api.products";
 import { attachInvoiceDocument } from "../services/accountingAttachment.server";
 import { livePlatform } from "../services/accountingConnection.server";
+import { deleteCapturedInvoice } from "../services/invoiceDeletion.server";
+import { invoiceDeletionBlockedReason } from "../utils/invoiceDeletion";
 export async function loader({ request, params }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const invoice = await prisma.invoice.findFirst({
@@ -82,7 +85,10 @@ export async function action({ request, params }: ActionFunctionArgs) {
   const id = params.id || "";
   const intent = String(form.get("intent"));
   try {
-    if (intent === "save") await saveInvoiceReview(request, id, form);
+    if (intent === "delete") {
+      await deleteCapturedInvoice(request, id);
+      return redirect("/app/invoices?deleted=1");
+    } else if (intent === "save") await saveInvoiceReview(request, id, form);
     else if (intent === "approve") {
       if (form.get("checkedOriginal") !== "yes")
         throw new Error(
@@ -308,13 +314,16 @@ function InvoiceEditor({
       matchedProductTitle: i.matchedProductTitle || "",
     })),
   );
-  const locked =
+  const financialActivity =
     invoice.accountingStatus === "EXPORTED" ||
     invoice.cogsSyncStatus === "SYNCED" ||
     invoice.exports.some(
       (e) => e.platform !== "CSV" && e.status !== "REJECTED",
     ) ||
     invoice.costChanges.some((c) => c.status !== "PLANNED");
+  const deletionPending = invoice.status === "DELETING";
+  const deletionBlocked = invoiceDeletionBlockedReason(invoice);
+  const locked = financialActivity || deletionPending;
   const update = (index: number, change: Partial<EditorItem>) => {
     setDirty(true);
     setItems((old) =>
@@ -850,6 +859,54 @@ function InvoiceEditor({
                     )}
                 </div>
               ))}
+            </BlockStack>
+          </Card>
+        )}
+        {role === "ADMIN" && (
+          <Card>
+            <BlockStack gap="300">
+              <Text as="h2" variant="headingMd">
+                Delete invoice
+              </Text>
+              <Text as="p" tone="subdued">
+                This removes the uploaded document, extracted fields, line
+                items, approval history, processing entry, and its values from
+                dashboards, reports, and purchase-order reconciliation.
+              </Text>
+              {deletionBlocked && (
+                <Text as="p" tone="critical">
+                  {deletionBlocked}
+                </Text>
+              )}
+              {deletionPending && (
+                <Text as="p" tone="critical">
+                  An earlier deletion was interrupted. Retry to finish removing
+                  its local data.
+                </Text>
+              )}
+              <Form
+                method="post"
+                onSubmit={(event) => {
+                  if (
+                    !window.confirm(
+                      `Permanently delete invoice ${invoice.invoiceNumber || invoice.id.slice(0, 8)} and all of its local data?`,
+                    )
+                  )
+                    event.preventDefault();
+                }}
+              >
+                <input type="hidden" name="intent" value="delete" />
+                <Button
+                  submit
+                  tone="critical"
+                  loading={busy}
+                  disabled={Boolean(deletionBlocked)}
+                >
+                  {deletionPending
+                    ? "Retry invoice deletion"
+                    : "Delete invoice"}
+                </Button>
+              </Form>
             </BlockStack>
           </Card>
         )}

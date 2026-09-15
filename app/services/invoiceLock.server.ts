@@ -3,6 +3,7 @@ export async function lockInvoice(
   tx: Prisma.TransactionClient,
   shop: string,
   id: string,
+  options: { allowDeleting?: boolean } = {},
 ) {
   await tx.$queryRaw(
     Prisma.sql`SELECT id FROM "Invoice" WHERE id = ${id} AND shop = ${shop} FOR UPDATE`,
@@ -12,5 +13,7 @@ export async function lockInvoice(
     include: { items: true, vendor: true, exports: true, costChanges: true },
   });
   if (!invoice) throw new Error("Invoice not found.");
+  if (invoice.status === "DELETING" && !options.allowDeleting)
+    throw new Error("Invoice deletion is in progress. Reload the invoice list.");
   return invoice;
 }
