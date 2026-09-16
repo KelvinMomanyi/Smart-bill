@@ -1,6 +1,9 @@
 type ParsedAddress = {
   name: string;
   address?: string;
+  email?: string;
+  phone?: string;
+  taxId?: string;
 };
 
 export type ParsedInvoiceItem = {
@@ -23,8 +26,10 @@ type ParsedInvoiceItemWithSource = ParsedInvoiceItem & {
 
 export type ParsedInvoice = {
   invoiceNumber?: string;
+  poNumber?: string;
   date: string;
   dueDate?: string;
+  paymentTerms?: string;
   billTo: ParsedAddress;
   vendor: ParsedAddress;
   currency: string;
@@ -105,7 +110,7 @@ export function normalizeInvoiceOcrText(text: string) {
 function parseMoney(value?: string | null, extendedDecimals = false) {
   if (!value) return undefined;
   let numeric = value
-    .replace(new RegExp(currencyCodes, "gi"), "")
+    .replace(new RegExp(`\\b(?:${currencyCodes})\\b`, "gi"), "")
     .replace(/R\$|KSh|[\u20ac\u00a3\u00a5\u20b9\u20a6\u20b5\u20b1$]/gi, "")
     .replace(/[\s'’]/g, "");
   const lastDot = numeric.lastIndexOf(".");
@@ -126,31 +131,48 @@ function parseMoney(value?: string | null, extendedDecimals = false) {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+const monthIndex: Record<string, string> = {
+  jan: "01", january: "01", feb: "02", february: "02", mar: "03", march: "03",
+  apr: "04", april: "04", may: "05", jun: "06", june: "06", jul: "07", july: "07",
+  aug: "08", august: "08", sep: "09", sept: "09", september: "09",
+  oct: "10", october: "10", nov: "11", november: "11", dec: "12", december: "12",
+};
+
+function fullYear(value: string) {
+  return value.length === 2 ? `20${value}` : value;
+}
+
 export function normalizeDate(raw?: string | null, dateOrder: "DMY" | "MDY" = "DMY") {
   if (!raw) return undefined;
 
   const trimmed = raw.trim().replace(/,/g, " ");
-  const isoMatch = trimmed.match(/\d{4}-\d{1,2}-\d{1,2}/);
-  if (isoMatch) {
-    const [year, month, day] = isoMatch[0].split("-");
-    return checkedDate(year, month, day);
-  }
+  const isoMatch = trimmed.match(/\b(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})\b/);
+  if (isoMatch) return checkedDate(isoMatch[1], isoMatch[2], isoMatch[3]);
 
-  const slashMatch = trimmed.match(/\d{1,2}[/-]\d{1,2}[/-]\d{2,4}/);
+  const slashMatch = trimmed.match(/\b(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})\b/);
   if (slashMatch) {
-    const [first, second, yearPart] = slashMatch[0].split(/[/-]/);
-    const year = yearPart.length === 2 ? `20${yearPart}` : yearPart;
+    const [, first, second, yearPart] = slashMatch;
+    const year = fullYear(yearPart);
     const dayFirst = Number(first) > 12 || (Number(second) <= 12 && dateOrder === "DMY");
     return checkedDate(year, dayFirst ? second : first, dayFirst ? first : second);
   }
 
-  const monthNameMatch = trimmed.match(
-    /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+\d{1,2}\s+\d{2,4}\b/i,
+  // Month names are resolved explicitly. Handing them to the Date constructor
+  // parses them in the server's local zone, so toISOString then reports the
+  // previous day for every store east of UTC.
+  const dayMonthYear = trimmed.match(
+    /\b(\d{1,2})(?:st|nd|rd|th)?[\s.-]+([A-Za-z]{3,9})\.?[\s.-]+(\d{2,4})\b/i,
   );
-  const date = new Date(monthNameMatch?.[0] || trimmed);
-  if (!Number.isNaN(date.getTime())) {
-    return date.toISOString().slice(0, 10);
-  }
+  const dayMonth = monthIndex[dayMonthYear?.[2].toLowerCase() || ""];
+  if (dayMonthYear && dayMonth)
+    return checkedDate(fullYear(dayMonthYear[3]), dayMonth, dayMonthYear[1]);
+
+  const monthDayYear = trimmed.match(
+    /\b([A-Za-z]{3,9})\.?[\s.-]+(\d{1,2})(?:st|nd|rd|th)?[\s.-]+(\d{2,4})\b/i,
+  );
+  const monthDay = monthIndex[monthDayYear?.[1].toLowerCase() || ""];
+  if (monthDayYear && monthDay)
+    return checkedDate(fullYear(monthDayYear[3]), monthDay, monthDayYear[2]);
 
   return undefined;
 }
@@ -172,56 +194,178 @@ function findValue(lines: string[], patterns: RegExp[]) {
   return undefined;
 }
 
-function extractCurrency(text: string) {
-  if (/\bKES\b|KSh|Ksh/i.test(text)) return "KES";
-  if (/\bEUR\b|\u20ac/i.test(text)) return "EUR";
-  if (/\bGBP\b|\u00a3/i.test(text)) return "GBP";
-  if (/\bCAD\b/i.test(text)) return "CAD";
-  if (/\bAUD\b/i.test(text)) return "AUD";
-  if (/\bNZD\b/i.test(text)) return "NZD";
-  if (/\bZAR\b/i.test(text)) return "ZAR";
-  if (/\bNGN\b|\u20a6/i.test(text)) return "NGN";
-  if (/\bGHS\b|\u20b5/i.test(text)) return "GHS";
-  if (/\bCNY\b/i.test(text)) return "CNY";
-  if (/\bJPY\b|\u00a5/i.test(text)) return "JPY";
-  if (/\bINR\b|\u20b9/i.test(text)) return "INR";
-  if (/\bAED\b/i.test(text)) return "AED";
-  if (/\bUGX\b/i.test(text)) return "UGX";
-  if (/\bTZS\b/i.test(text)) return "TZS";
-  if (/\bRWF\b/i.test(text)) return "RWF";
-  if (/\bBRL\b|R\$/i.test(text)) return "BRL";
-  if (/\bPHP\b|\u20b1/i.test(text)) return "PHP";
-  return "USD";
+const currencySymbolClass = "[$\\u20ac\\u00a3\\u00a5\\u20b9\\u20a6\\u20b5\\u20b1]";
+const symbolCurrencies: Array<[RegExp, string]> = [
+  [/R\$/, "BRL"],
+  [/KSh/i, "KES"],
+  [/\u20ac/, "EUR"],
+  [/\u00a3/, "GBP"],
+  [/\u00a5/, "JPY"],
+  [/\u20b9/, "INR"],
+  [/\u20a6/, "NGN"],
+  [/\u20b5/, "GHS"],
+  [/\u20b1/, "PHP"],
+];
+
+// A three-letter code only names the invoice currency when it sits beside an
+// amount. Scanning prose books "PHP development" in pesos and "CAD drawings"
+// in Canadian dollars.
+const codeBesideMoney = new RegExp(
+  `\\b(${currencyCodes})\\b\\s*(?:${currencySymbolClass}\\s*)?[+-]?\\d` +
+    `|[+-]?\\d[\\d.,'\u2019\\s]*\\b(${currencyCodes})\\b`,
+  "i",
+);
+
+function currencyOnLine(line: string | undefined, allowDollar: boolean) {
+  if (!line) return undefined;
+  const code = line.match(codeBesideMoney);
+  if (code) return (code[1] || code[2]).toUpperCase();
+  const symbol = symbolCurrencies.find(([pattern]) => pattern.test(line));
+  if (symbol) return symbol[1];
+  // "$" is shared by several currencies, so it only decides when no code does.
+  return allowDollar && /\$\s*[+-]?\d/.test(line) ? "USD" : undefined;
+}
+
+function extractCurrency(lines: string[], summaryLines: Array<string | undefined>) {
+  for (const line of summaryLines) {
+    const currency = currencyOnLine(line, true);
+    if (currency) return { currency, assumed: false };
+  }
+  for (const allowDollar of [false, true]) {
+    for (const line of lines) {
+      const currency = currencyOnLine(line, allowDollar);
+      if (currency) return { currency, assumed: false };
+    }
+  }
+  return { currency: "USD", assumed: true };
 }
 
 function isLikelyHeader(line: string) {
-  const lower = line.toLowerCase();
   return (
-    lower.includes("invoice") ||
-    lower.includes("receipt") ||
-    lower.includes("statement") ||
-    lower.includes("date") ||
-    lower.includes("total") ||
-    lower.includes("subtotal") ||
-    lower.includes("tax") ||
-    lower.includes("amount due") ||
-    lower.includes("bill to") ||
-    lower.includes("ship to") ||
-    /^page\s+\d+/.test(lower)
+    /\b(?:invoices?|receipts?|statements?|dates?|totals?|subtotals?|tax|vat|gst|amount\s+due|bill\s+to|ship\s+to|remit\s+to)\b/i.test(
+      line,
+    ) || /^page\s+\d+/i.test(line)
   );
 }
 
-function extractVendor(lines: string[]) {
-  const labeledVendor = findValue(lines, [
-    /(?:vendor|supplier|from|bill\s+from)\s*:?\s*(.+)$/i,
-  ]);
+const emailPattern = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/;
+const labelledPhone =
+  /\b(?:tel|telephone|phone|mobile|cell|fax|contact)\b\.?\s*[:.]?\s*(\+?\d[\d\s()./-]{6,}\d)/i;
+const barePhone = /^\+?\d[\d\s()./-]{7,}\d$/;
+const taxIdPattern =
+  /\b(?:tax|vat|gst|pin)\s*(?:id|i\.?d\.?|no\.?|num(?:ber)?|reg(?:istration)?(?:\s*(?:no\.?|number))?)\s*[:.]?\s*([A-Z0-9][A-Z0-9/-]{3,})/i;
+const otherLabelledField = /^[A-Za-z][\w\s]{0,24}:/;
+const contactLabel =
+  /^(?:tel|telephone|phone|mobile|cell|fax|e-?mail|web(?:site)?|www\.|https?:|vat|tax|gst|pin|reg(?:istration)?|company\s+(?:no|number|reg)|p\.?\s?o\.?\s*box|attn)\b/i;
 
-  if (labeledVendor) return { name: labeledVendor };
+function vendorScore(line: string, index: number) {
+  if (isLikelyHeader(line) || contactLabel.test(line)) return -1;
+  if (emailPattern.test(line) || barePhone.test(line)) return -1;
+  // Street numbers and account references are never the trading name.
+  if (/^\d/.test(line)) return -1;
+  const letters = line.match(/[\p{L}]/gu)?.length || 0;
+  if (letters < 3 || letters / line.length < 0.5) return -1;
+  let score = 12 - index;
+  if (
+    /\b(?:ltd|limited|llc|inc|incorporated|corp|corporation|co|company|plc|pty|gmbh|bv|nv|srl|sarl|ag|oy|ab|as|pvt|holdings?|group|services?|solutions?|enterprises?|trading|traders?|supplies|supply|industries|works|studios?|labs?|partners?|associates?|consult(?:ing|ants?))\b\.?$/i.test(
+      line,
+    )
+  )
+    score += 25;
+  if (/^[^\p{Ll}]+$/u.test(line)) score += 6;
+  return score;
+}
 
-  const firstUsefulLine = lines.find(
-    (line) => line.length > 2 && !isLikelyHeader(line),
+function vendorRegionEnd(lines: string[]) {
+  const stop = lines.findIndex(
+    (line, index) =>
+      index > 0 &&
+      (/\b(?:bill\s+to|ship\s+to|sold\s+to|invoice\s+to|deliver\s+to|customer)\b/i.test(
+        line,
+      ) ||
+        Boolean(itemHeaderHints(line)) ||
+        isItemSummaryLine(line)),
   );
-  return { name: firstUsefulLine || "Unknown Vendor" };
+  return Math.min(stop < 0 ? lines.length : stop, 20);
+}
+
+function extractVendor(lines: string[], regionEnd: number): ParsedAddress {
+  // Weak labels such as "from" must carry a separator, or prose like
+  // "balance carried from previous invoice" is read as the supplier.
+  const labelPattern =
+    /^\s*(?:vendor|supplier|seller|from|bill(?:ed)?\s+from|sold\s+by|remit\s+to|company)\s*[:\u2013-]\s*(.+)$/i;
+  let nameIndex = -1;
+  let name = "";
+
+  for (const [index, line] of lines.entries()) {
+    const labelled = line.match(labelPattern)?.[1]?.trim();
+    if (labelled) {
+      nameIndex = index;
+      name = labelled;
+      break;
+    }
+  }
+
+  if (!name) {
+    let best = 0;
+    for (const [index, line] of lines.slice(0, Math.max(regionEnd, 1)).entries()) {
+      const score = vendorScore(line, index);
+      if (score > best) {
+        best = score;
+        nameIndex = index;
+        name = line;
+      }
+    }
+  }
+
+  const region = lines.slice(0, Math.max(regionEnd, nameIndex + 1));
+  const email = region.find((line) => emailPattern.test(line))?.match(emailPattern)?.[0];
+  const phone =
+    region.find((line) => labelledPhone.test(line))?.match(labelledPhone)?.[1] ||
+    region.find((line) => barePhone.test(line));
+  const taxId = region.find((line) => taxIdPattern.test(line))?.match(taxIdPattern)?.[1];
+
+  const address: string[] = [];
+  for (let cursor = nameIndex + 1; cursor < region.length && address.length < 4; cursor += 1) {
+    const line = region[cursor];
+    if (
+      emailPattern.test(line) ||
+      labelledPhone.test(line) ||
+      barePhone.test(line) ||
+      taxIdPattern.test(line) ||
+      otherLabelledField.test(line) ||
+      isLikelyHeader(line) ||
+      new RegExp(`^${moneyPattern}$`, "i").test(line) ||
+      !/[\p{L}\d]/u.test(line) ||
+      line.length > 120
+    )
+      break;
+    address.push(line);
+  }
+
+  return {
+    name: name || "Unknown Vendor",
+    address: address.join(", ") || undefined,
+    email,
+    phone: phone?.trim(),
+    taxId,
+  };
+}
+
+function extractPaymentTerms(lines: string[]) {
+  const labelled = findValue(lines, [
+    /\b(?:payment\s+terms?|terms\s+of\s+payment|payment\s+conditions?)\s*[:.\u2013-]\s*(.+)$/i,
+    /^\s*terms\s*[:.\u2013-]\s*(.+)$/i,
+  ]);
+  if (labelled) return labelled.slice(0, 120);
+  return lines
+    .find((line) =>
+      /^\s*(?:net\s*\d{1,3}(?:\s*days?)?|due\s+(?:on|upon)\s+receipt|payable\s+on\s+receipt|cash\s+on\s+delivery|c\.?o\.?d\.?|prepaid|\d{1,2}\s*\/\s*\d{1,2}\s+net\s*\d{1,3})\s*$/i.test(
+        line,
+      ),
+    )
+    ?.trim()
+    .slice(0, 120);
 }
 
 function extractBlockAfterLabel(
@@ -246,7 +390,9 @@ function extractBlockAfterLabel(
       if (
         /(?:ship\s+to|description|item|qty|quantity|amount|subtotal|total|tax|vat|gst)\b/i.test(
           nextLine,
-        )
+        ) ||
+        otherLabelledField.test(nextLine) ||
+        new RegExp(`^${moneyPattern}$`, "i").test(nextLine)
       )
         break;
       block.push(nextLine);
@@ -294,30 +440,33 @@ const itemUnitToken =
 const itemUnitPattern =
   `(?:${itemUnitToken}\\.?\\s+)?`;
 
+const columnWords = {
+  description:
+    "(?:item\\s*)?(?:description|details?|particulars?|goods|narration|articles)|item|product|service",
+  quantity: "qty|q\\s*ty|quantity|qty\\s*shipped|pcs",
+  rate:
+    "rate|price|cost|unit\\s*(?:price|cost|rate|amount|value)|u\\.?\\s*price|price\\s*(?:each|per\\s*unit)|unitprice|list\\s*price|mrp",
+  amount:
+    "amount|line\\s*(?:total|amount)|ext(?:ended)?\\.?\\s*(?:price|amount)|total\\s*price|net\\s*amount|gross\\s*amount|taxable\\s*value|total\\s*value|value",
+};
+
 function itemHeaderHints(line: string): ItemColumnHints | null {
   const lower = line
     .toLowerCase()
     .replace(/[|:_-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  const description = /\b(?:description|item|product|service|details?)\b/.test(
-    lower,
-  );
-  const quantity = /\b(?:qty|q\s*ty|quantity)\b/.test(lower);
-  const rate =
-    /\b(?:rate|price|cost|unit\s*(?:price|cost|rate|amount)|price\s*each|unitprice)\b/.test(
-      lower,
-    );
+  const description = new RegExp(`\\b(?:${columnWords.description})\\b`).test(lower);
+  const quantity = new RegExp(`\\b(?:${columnWords.quantity})\\b`).test(lower);
+  const rate = new RegExp(`\\b(?:${columnWords.rate})\\b`).test(lower);
   const amount =
-    /\b(?:amount|line\s*total|extended\s*(?:price|amount)|total\s*price)\b/.test(
-      lower,
-    ) ||
+    new RegExp(`\\b(?:${columnWords.amount})\\b`).test(lower) ||
     (/\btotal\b/.test(lower) &&
       (quantity || rate || /^(?:description|item|product|service)\s+total$/.test(lower)));
-  const labelOnly =
-    /^(?:item\s*)?(?:description|details?)$|^(?:item|product|service)$|^(?:qty|q\s*ty|quantity)$|^(?:rate|price|cost|unit\s*(?:price|cost|rate|amount)|price\s*each|unitprice)$|^(?:amount|line\s*total|extended\s*(?:price|amount)|total\s*price)$/i.test(
-      lower,
-    );
+  const labelOnly = new RegExp(
+    `^(?:${columnWords.description}|${columnWords.quantity}|${columnWords.rate}|${columnWords.amount})$`,
+    "i",
+  ).test(lower);
   const trailingValue = new RegExp(`${moneyPattern}\\s*$`, "i").test(line);
   if (
     !labelOnly &&
@@ -340,14 +489,27 @@ function isItemSummaryLine(line: string) {
   ).test(line);
 }
 
+function roundConfidence(value: number) {
+  return Math.max(0.05, Math.min(1, Math.round(value * 100) / 100));
+}
+
 function buildParsedItem(
   rawDescription: string,
   rawQuantity: string,
   rawRate: string | undefined,
   rawAmount?: string,
+  relaxed = false,
 ): ParsedInvoiceItemWithSource | null {
   const itemName = normalizeItemName(rawDescription);
-  const skuMatch = itemName.match(/^([A-Z0-9._/-]{3,})\s+(.+)$/);
+  const skuMatch = itemName.match(/^([A-Z0-9][A-Z0-9._/-]{2,})\s+(.+)$/);
+  // A leading run of digits is a pack size or a line number ("500 Sheets Copier
+  // Paper"), not a stock code. Require a letter or an internal separator.
+  const sku =
+    skuMatch &&
+    (/[A-Z]/.test(skuMatch[1]) ||
+      (/[._/-]/.test(skuMatch[1]) && !/^\d+$/.test(skuMatch[1])))
+      ? skuMatch[1]
+      : undefined;
   const quantity = Number.parseFloat(rawQuantity.replace(",", "."));
   const parsedAmount = parseMoney(rawAmount);
   const standardRate = parseMoney(rawRate);
@@ -387,7 +549,7 @@ function buildParsedItem(
   const rate =
     parsedRate ??
     (amount != null && quantity > 0 ? amount / quantity : undefined);
-  const description = skuMatch ? skuMatch[2] : itemName;
+  const description = sku ? skuMatch![2] : itemName;
 
   if (
     !description ||
@@ -401,14 +563,22 @@ function buildParsedItem(
   )
     return null;
 
+  // Every column that had to be inferred rather than read lowers the score the
+  // review screen shows against the line.
+  const readColumns = Number(parsedRate != null) + Number(parsedAmount != null);
+  const confidence = roundConfidence(
+    (readColumns === 2 ? 1 : readColumns === 1 ? 0.8 : 0.6) - (relaxed ? 0.1 : 0),
+  );
+
   return {
-    sku: skuMatch?.[1],
+    sku,
     name: description,
     description,
     quantity,
     rate,
     price: rate,
     amount,
+    confidence,
     _rawRate: rawRate,
     _rawAmount: rawAmount,
   };
@@ -536,25 +706,13 @@ function columnLabel(line: string) {
     .replace(/[|:_-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  if (
-    /^(?:item\s*)?(?:description|details?)$|^(?:item|product|service)$/.test(
-      normalized,
-    )
-  )
+  if (new RegExp(`^(?:${columnWords.description})$`, "i").test(normalized))
     return "description" as const;
-  if (/^(?:qty|q\s*ty|quantity)$/.test(normalized))
+  if (new RegExp(`^(?:${columnWords.quantity})$`, "i").test(normalized))
     return "quantity" as const;
-  if (
-    /^(?:rate|price|cost|unit\s*(?:price|cost|rate|amount)|price\s*each|unitprice)$/.test(
-      normalized,
-    )
-  )
+  if (new RegExp(`^(?:${columnWords.rate})$`, "i").test(normalized))
     return "rate" as const;
-  if (
-    /^(?:amount|total|line\s*total|extended\s*(?:price|amount)|total\s*price)$/.test(
-      normalized,
-    )
-  )
+  if (new RegExp(`^(?:${columnWords.amount}|total)$`, "i").test(normalized))
     return "amount" as const;
   return undefined;
 }
