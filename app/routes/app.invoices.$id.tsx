@@ -46,6 +46,7 @@ import { attachInvoiceDocument } from "../services/accountingAttachment.server";
 import { livePlatform } from "../services/accountingConnection.server";
 import { deleteCapturedInvoice } from "../services/invoiceDeletion.server";
 import { invoiceDeletionBlockedReason } from "../utils/invoiceDeletion";
+import { CsvDownloadButton } from "../components/CsvDownloadButton";
 export async function loader({ request, params }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const invoice = await prisma.invoice.findFirst({
@@ -700,12 +701,12 @@ function InvoiceEditor({
                     </Button>
                   </Form>
                 ))}
-                <Button
-                  url={`/api/exportCSV?invoiceId=${invoice.id}`}
+                <CsvDownloadButton
+                  invoiceId={invoice.id}
                   disabled={dirty || invoice.reviewStatus !== "APPROVED"}
                 >
                   Download approved CSV
-                </Button>
+                </CsvDownloadButton>
               </InlineStack>
             </BlockStack>
           </Card>

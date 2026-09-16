@@ -14,6 +14,7 @@ import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
 import { formatMoney } from "../utils/format";
 import { getUserRole } from "../utils/rbac.server";
+import { CsvDownloadButton } from "../components/CsvDownloadButton";
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const url = new URL(request.url);
@@ -134,7 +135,9 @@ export default function InvoiceQueue() {
               )}
             </InlineStack>
             {data.role === "ADMIN" && (
-              <Button url="/api/exportCSV">Download approved invoices CSV</Button>
+              <CsvDownloadButton>
+                Download approved invoices CSV
+              </CsvDownloadButton>
             )}
           </BlockStack>
         </Card>
