@@ -273,7 +273,7 @@ export async function confirmAuthorization(
     async (tx) => {
       // Serialize reconnects with token refresh and competing confirmations.
       await tx.$queryRaw(
-        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${row.shop}), hashtext(${row.platform}))`,
+        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${row.shop}), hashtext(${row.platform}))::text AS "lock"`,
       );
       const running = await tx.accountingExport.count({
         where: {

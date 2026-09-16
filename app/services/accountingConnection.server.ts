@@ -80,7 +80,7 @@ export async function getAccountingConnection(
   return prisma.$transaction(
     async (tx) => {
       await tx.$queryRaw(
-        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${shop}), hashtext(${platform}))`,
+        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${shop}), hashtext(${platform}))::text AS "lock"`,
       );
       await tx.$queryRaw(
         Prisma.sql`SELECT id FROM "AccountingConnection" WHERE shop = ${shop} AND platform = ${platform} FOR UPDATE`,
@@ -103,7 +103,7 @@ export async function disconnectAccounting(
   const failure = await prisma.$transaction(
     async (tx) => {
       await tx.$queryRaw(
-        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${shop}), hashtext(${platform}))`,
+        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${shop}), hashtext(${platform}))::text AS "lock"`,
       );
       const stored = await tx.accountingConnection.findUnique({
         where: { shop_platform: { shop, platform } },
