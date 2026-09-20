@@ -226,7 +226,7 @@ function currencyOnLine(line: string | undefined, allowDollar: boolean) {
   return allowDollar && /\$\s*[+-]?\d/.test(line) ? "USD" : undefined;
 }
 
-function extractCurrency(lines: string[], summaryLines: Array<string | undefined>) {
+function extractCurrency(lines: string[], summaryLines: Array<string | undefined> = []) {
   for (const line of summaryLines) {
     const currency = currencyOnLine(line, true);
     if (currency) return { currency, assumed: false };
@@ -908,6 +908,7 @@ function findInvoiceDate(lines: string[], dateOrder: "DMY" | "MDY") {
 type ParsedMoneySource = {
   raw: string;
   value: number;
+  line: string;
 };
 
 function findMoneyOnLine(line?: string): ParsedMoneySource | undefined {
@@ -916,7 +917,7 @@ function findMoneyOnLine(line?: string): ParsedMoneySource | undefined {
   const matches = [...line.matchAll(new RegExp(moneyPattern, "gi"))];
   const raw = matches.at(-1)?.[1];
   const value = parseMoney(raw);
-  return raw && value != null ? { raw, value } : undefined;
+  return raw && value != null ? { raw, value, line } : undefined;
 }
 
 function findMoneyByLabel(
@@ -1207,10 +1208,19 @@ export function parseInvoiceText(text: string, dateOrder: "DMY" | "MDY" = "DMY")
     trustedItemTarget,
   );
   const decimalCorrected = summary.corrected || repairedItems.corrected;
-  const vendor = extractVendor(lines);
+  const vendor = extractVendor(lines, vendorRegionEnd(lines));
+  const currencyResult = extractCurrency(lines, [
+    subtotalSource?.line,
+    taxSource?.line,
+    totalSource?.line,
+  ]);
   const warnings = date
     ? []
     : ["Invoice date was missing or invalid; confirm the date before approval."];
+  if (currencyResult.assumed)
+    warnings.push(
+      "Invoice currency was not found. SmartBill assumed USD; confirm the currency before approval.",
+    );
   if (decimalCorrected)
     warnings.push(
       "OCR omitted a decimal separator in one or more amounts. SmartBill restored it using the invoice arithmetic; confirm the corrected values before approval.",
@@ -1220,9 +1230,10 @@ export function parseInvoiceText(text: string, dateOrder: "DMY" | "MDY" = "DMY")
     invoiceNumber: findInvoiceNumber(lines),
     date: date || new Date().toISOString().slice(0, 10),
     dueDate,
+    paymentTerms: extractPaymentTerms(lines),
     billTo: extractBillTo(lines),
     vendor,
-    currency: extractCurrency(normalizedText),
+    currency: currencyResult.currency,
     subtotal,
     tax,
     total,
