@@ -1,8 +1,8 @@
 import prisma from "../db.server";
 import { Prisma } from "@prisma/client";
-import { requireAdmin } from "../utils/rbac.server";
+import { requireApprovalAccess } from "../utils/rbac.server";
 import { requireSubscription } from "./billing.server";
-import { invoiceIdentity } from "./invoiceWorkflow.server";
+import { fetchShopCurrency, invoiceIdentity } from "./invoiceWorkflow.server";
 import {
   invoiceIssues,
   normalizedKey,
@@ -15,7 +15,29 @@ import {
   refreshPurchaseOrder,
 } from "./poReconciliation.server";
 import { lockInvoice } from "./invoiceLock.server";
+import {
+  allocateCharges,
+  isChargeCategory,
+  isChargeLine,
+  isLandedCostMethod,
+  landedCostIssues,
+  lineValue,
+} from "../utils/landedCost";
+import { needsPackSize, resolvePackSize } from "../utils/unitCost";
+import { resolveFxRate, resolveFxRateDate } from "../utils/exchangeRate";
+import { creditByLine } from "./creditNotes.server";
 import type { authenticate } from "../shopify.server";
+import { syncFreightLines } from "./freightAllocation.server";
+import {
+  EXCHANGE_RATE_SOURCES,
+  recordInvoiceFxSelection,
+  type ExchangeRateSource,
+} from "./exchangeRate.server";
+import { rememberInvoiceUomMappings } from "./uomMapping.server";
+import {
+  ensureDefaultApprovalRules,
+  recordApproval,
+} from "./approvalRules.server";
 
 type Admin = Awaited<ReturnType<typeof authenticate.admin>>["admin"];
 export async function findVariants(admin: Admin, query: string) {
@@ -23,7 +45,7 @@ export async function findVariants(admin: Admin, query: string) {
     `#graphql
     query SmartBillVariantSearch($query: String!) {
       productVariants(first: 20, query: $query) { nodes {
-        id title sku product { title } inventoryItem { id unitCost { amount currencyCode } }
+        id title sku product { title } inventoryItem { id unitCost { amount currencyCode } measurement { weight { value unit } } }
       } }
     }`,
     { variables: { query: query.trim().slice(0, 150) } },
@@ -41,6 +63,7 @@ export type Variant = {
   inventoryItem: {
     id: string;
     unitCost: { amount: string; currencyCode: string } | null;
+    measurement?: { weight?: { value: number; unit: string } | null } | null;
   };
 };
 export async function variantsByIds(admin: Admin, ids: string[]) {
@@ -49,7 +72,7 @@ export async function variantsByIds(admin: Admin, ids: string[]) {
     `#graphql
     query SmartBillConfirmedVariants($ids: [ID!]!) {
       nodes(ids: $ids) { ... on ProductVariant {
-        id title sku product { title } inventoryItem { id unitCost { amount currencyCode } }
+        id title sku product { title } inventoryItem { id unitCost { amount currencyCode } measurement { weight { value unit } } }
       } }
     }`,
     { variables: { ids: [...new Set(ids)] } },
@@ -88,16 +111,41 @@ export async function saveInvoiceReview(
   const rawItems = JSON.parse(String(form.get("items") || "[]"));
   if (!Array.isArray(rawItems) || !rawItems.length || rawItems.length > 200)
     throw new Error("An invoice must have 1–200 lines.");
-  const items = rawItems.map((item: Record<string, unknown>) => ({
-    name: String(item.name || "").trim(),
-    sku: String(item.sku || "").trim() || null,
-    quantity: Number(item.quantity),
-    price: Number(item.price),
-    amount: Number(item.amount),
-    shopifyVariantId: String(item.shopifyVariantId || "") || null,
-    matchConfirmed: item.matchConfirmed === true,
-    syncCost: item.syncCost !== false,
-  }));
+  const items = rawItems.map((item: Record<string, unknown>) => {
+    const category =
+      isChargeCategory(item.category) && item.category !== "PRODUCT"
+        ? item.category
+        : "PRODUCT";
+    const charge = category !== "PRODUCT";
+    const manualCharge = Number(item.manualCharge);
+    const supplierUoM = charge
+      ? null
+      : String(item.supplierUoM || "").trim().toLowerCase().slice(0, 20) || null;
+    const packSize = Number(item.packSize);
+    return {
+      name: String(item.name || "").trim(),
+      sku: String(item.sku || "").trim() || null,
+      category,
+      manualCharge:
+        !charge && Number.isFinite(manualCharge) && manualCharge > 0
+          ? manualCharge
+          : null,
+      supplierUoM,
+      packSize:
+        !charge && Number.isFinite(packSize) && packSize > 0
+          ? packSize
+          : null,
+      quantity: Number(item.quantity),
+      price: Number(item.price),
+      amount: Number(item.amount),
+      // A charge line is never matched to a variant or synced as a product cost.
+      shopifyVariantId: charge
+        ? null
+        : String(item.shopifyVariantId || "") || null,
+      matchConfirmed: charge ? false : item.matchConfirmed === true,
+      syncCost: charge ? false : item.syncCost !== false,
+    };
+  });
   const subtotal = Number(form.get("subtotal"));
   const tax = Number(form.get("tax"));
   const total = Number(form.get("total"));
@@ -124,6 +172,55 @@ export async function saveInvoiceReview(
     throw new Error(
       "Use valid, positive quantities and finite monetary amounts.",
     );
+  const methodValue = String(form.get("landedCostMethod") || "NONE");
+  const landedCostMethod = isLandedCostMethod(methodValue)
+    ? methodValue
+    : "NONE";
+  const chargeTotal = items
+    .filter((item) => isChargeLine(item))
+    .reduce((sum, item) => sum + lineValue(item), 0);
+  const productItems = items.filter((item) => !isChargeLine(item));
+  if (chargeTotal > 0) {
+    if (!productItems.length)
+      throw new Error(
+        "Add at least one product line for the freight and charges to be allocated to.",
+      );
+    // Validates manual amounts against the charge total and the chosen method.
+    allocateCharges(
+      productItems.map((item, index) => ({ ...item, id: String(index) })),
+      chargeTotal,
+      landedCostMethod,
+      Object.fromEntries(
+        productItems.map((item, index) => [String(index), item.manualCharge]),
+      ),
+    );
+  }
+  issues.push(...landedCostIssues(items, landedCostMethod));
+  // Shopify costs are written in the shop currency, so a foreign invoice needs
+  // an explicit rate before it can be approved.
+  const shopCurrency = await fetchShopCurrency(admin);
+  const fxRateValue = String(form.get("fxRate") || "").trim();
+  const fx = resolveFxRate(
+    currency,
+    shopCurrency,
+    fxRateValue ? Number(fxRateValue) : null,
+  );
+  const requestedFxSource = String(form.get("fxSource") || "MANUAL");
+  const fxSource: ExchangeRateSource = EXCHANGE_RATE_SOURCES.includes(
+    requestedFxSource as ExchangeRateSource,
+  )
+    ? (requestedFxSource as ExchangeRateSource)
+    : "MANUAL";
+  const fxRateDate = fx.required
+    ? resolveFxRateDate(form.get("fxRateDate")) || new Date(`${date}T00:00:00.000Z`)
+    : null;
+  if (fx.problem) issues.push(fx.problem);
+  for (const item of items) {
+    if (needsPackSize(item.supplierUoM) && !item.packSize)
+      issues.push(
+        `Line "${item.name || "unnamed"}" is billed in ${item.supplierUoM}s. Enter how many stock units one ${item.supplierUoM} contains, or set it to 1 if the unit is already a stock unit.`,
+      );
+  }
   const variants = await variantsByIds(
     admin,
     items.filter((i) => i.shopifyVariantId).map((i) => i.shopifyVariantId!),
@@ -165,8 +262,9 @@ export async function saveInvoiceReview(
     await tx.costChange.deleteMany({
       where: { invoiceId: id, status: "PLANNED" },
     });
+    await tx.approval.deleteMany({ where: { invoiceId: id } });
     await tx.invoiceItem.deleteMany({ where: { invoiceId: id } });
-    await tx.invoice.update({
+    const saved = await tx.invoice.update({
       where: { id },
       data: {
         vendorId: vendor.id,
@@ -184,6 +282,13 @@ export async function saveInvoiceReview(
         reviewStatus: issues.length ? "NEEDS_ATTENTION" : "PENDING_REVIEW",
         discrepancySummary: issues.join("\n") || null,
         revision: { increment: 1 },
+        landedCostMethod,
+        landedCostUpdatedAt: new Date(),
+        fxRate: fx.required ? fx.rate : null,
+        fxRateSource: fx.required ? fxSource : null,
+        fxRateDate,
+        shopCurrency,
+        costInShopCurrency: fx.required ? total * fx.rate : total,
         accountingMapping: Prisma.DbNull,
         cogsSyncStatus: "NOT_REQUESTED",
         items: {
@@ -201,7 +306,21 @@ export async function saveInvoiceReview(
           }),
         },
       },
+      include: { items: true },
     });
+    await syncFreightLines(tx, saved);
+    if (fx.required && fxRateDate)
+      await recordInvoiceFxSelection(tx, {
+        invoiceId: id,
+        shop: session.shop,
+        fromCurrency: currency,
+        toCurrency: shopCurrency,
+        invoiceAmount: total,
+        rate: fx.rate,
+        rateDate: fxRateDate,
+        source: fxSource,
+        confidence: fxSource === "MANUAL" ? 40 : 80,
+      });
     await tx.auditEvent.create({
       data: {
         shop: session.shop,
@@ -227,54 +346,128 @@ export async function approveInvoice(
   revision: number,
   exceptionReason = "",
 ) {
-  const { session, actor } = await requireAdmin(request);
+  const { session, admin, actor, role } = await requireApprovalAccess(request);
   await requireSubscription(request);
+  await ensureDefaultApprovalRules(session.shop);
   const current = await prisma.invoice.findFirst({
     where: { id, shop: session.shop },
+    include: { items: true },
   });
   if (!current) throw new Error("Invoice not found.");
   const discrepancies = current.purchaseOrderId
     ? (await reconcileInvoiceWithPO(id, current.purchaseOrderId)).discrepancies
     : [];
+  const shopCurrency = await fetchShopCurrency(admin);
+  const fx = resolveFxRate(current.currency, shopCurrency, current.fxRate);
+  if (fx.problem) throw new Error(fx.problem);
+  for (const item of current.items) {
+    if (isChargeLine(item)) continue;
+    if (needsPackSize(item.supplierUoM) && !item.packSize)
+      throw new Error(
+        `Line "${item.name}" is billed in ${item.supplierUoM}s. Enter how many stock units one ${item.supplierUoM} contains before approval.`,
+      );
+    resolvePackSize(item, null);
+  }
+  // A credit that is still only matched would silently change the cost later,
+  // so it must be approved or voided before the invoice can be approved.
+  const credits = await prisma.creditNote.findMany({
+    where: { shop: session.shop, invoiceId: id },
+  });
+  const waiting = credits.filter((credit) => credit.status === "MATCHED");
+  if (waiting.length)
+    throw new Error(
+      `${waiting.length} credit note${waiting.length === 1 ? "" : "s"} linked to this invoice still need approval or voiding.`,
+    );
+  const creditInfo = creditByLine(
+    credits.filter((credit) => ["APPROVED", "APPLIED"].includes(credit.status)),
+    current.items,
+  );
+  if (current.total - creditInfo.total < -0.011)
+    throw new Error(
+      "The linked credit notes are larger than the invoice total. Check the credit amounts before approval.",
+    );
   if (discrepancies.length && exceptionReason.trim().length < 10)
     throw new Error(
       "Resolve the PO differences or enter a clear reason for accepting them (at least 10 characters).",
     );
-  await prisma.$transaction(async (tx) => {
+  return prisma.$transaction(async (tx) => {
     const invoice = await lockInvoice(tx, session.shop, id);
     if (invoice.revision !== revision)
       throw new Error("Invoice changed. Reload and review again.");
-    const issues = invoiceIssues(invoice);
+    const landedCostMethod = isLandedCostMethod(invoice.landedCostMethod)
+      ? invoice.landedCostMethod
+      : "NONE";
+    const productItems = invoice.items.filter((item) => !isChargeLine(item));
+    const chargeTotal = invoice.items
+      .filter((item) => isChargeLine(item))
+      .reduce((sum, item) => sum + lineValue(item), 0);
+    if (chargeTotal > 0)
+      allocateCharges(
+        productItems,
+        chargeTotal,
+        landedCostMethod,
+        Object.fromEntries(
+          productItems.map((item) => [item.id, item.manualCharge]),
+        ),
+      );
+    const issues = [
+      ...invoiceIssues(invoice),
+      ...landedCostIssues(invoice.items, landedCostMethod),
+    ];
     if (issues.length) throw new Error(issues.join(" "));
     if (!invoice.vendor || invoice.vendor.name === "Unknown Vendor")
       throw new Error("Confirm the supplier before approval.");
+    const approval = await recordApproval(tx, {
+      invoice,
+      actor,
+      sessionId: session.id,
+      role,
+      comments: exceptionReason,
+    });
     await tx.invoice.update({
       where: { id },
       data: {
-        reviewStatus: "APPROVED",
-        approvedAt: new Date(),
-        approvedBy: actor,
+        reviewStatus: approval.complete ? "APPROVED" : "PENDING_REVIEW",
+        approvedAt: approval.complete ? new Date() : null,
+        approvedBy: approval.complete ? actor : null,
       },
     });
-    for (const item of invoice.items.filter(
-      (i) => i.matchConfirmed && i.shopifyVariantId,
-    )) {
-      const key = {
+    if (approval.complete) {
+      await tx.vendor.update({
+        where: { id: invoice.vendor.id },
+        data: { defaultLandedCostMethod: landedCostMethod },
+      });
+      for (const item of invoice.items.filter(
+        (i) => i.matchConfirmed && i.shopifyVariantId,
+      )) {
+        const key = {
+          shop: session.shop,
+          vendorKey: normalizedKey(invoice.vendor.name),
+          itemKey: supplierItemKey(item),
+        };
+        const uom = {
+          packSize: item.packSize ?? null,
+          supplierUoM: item.supplierUoM ?? null,
+        };
+        await tx.supplierMapping.upsert({
+          where: { shop_vendorKey_itemKey: key },
+          create: {
+            ...key,
+            ...uom,
+            variantId: item.shopifyVariantId!,
+            title: item.matchedProductTitle || item.name,
+          },
+          update: {
+            ...uom,
+            variantId: item.shopifyVariantId!,
+            title: item.matchedProductTitle || item.name,
+          },
+        });
+      }
+      await rememberInvoiceUomMappings(tx, {
         shop: session.shop,
-        vendorKey: normalizedKey(invoice.vendor.name),
-        itemKey: supplierItemKey(item),
-      };
-      await tx.supplierMapping.upsert({
-        where: { shop_vendorKey_itemKey: key },
-        create: {
-          ...key,
-          variantId: item.shopifyVariantId!,
-          title: item.matchedProductTitle || item.name,
-        },
-        update: {
-          variantId: item.shopifyVariantId!,
-          title: item.matchedProductTitle || item.name,
-        },
+        supplierId: invoice.vendor.id,
+        items: invoice.items,
       });
     }
     await tx.auditEvent.create({
@@ -282,13 +475,22 @@ export async function approveInvoice(
         shop: session.shop,
         invoiceId: id,
         actor,
-        action: "APPROVED",
+        action: approval.complete ? "APPROVED" : "APPROVAL_RECORDED",
         detail: {
           revision,
+          role,
+          approvalsRequired: approval.requirements.map((rule) => ({
+            rule: rule.name,
+            requiredApprovers: rule.requiredApprovers,
+          })),
           discrepancies,
           exceptionReason: exceptionReason.trim(),
+          landedCostMethod,
+          fxRate: fx.required ? fx.rate : null,
+          creditsApplied: creditInfo.total,
         },
       },
     });
+    return approval;
   });
 }

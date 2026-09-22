@@ -25,6 +25,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       pageCount: true,
       error: true,
       invoiceId: true,
+      creditNoteId: true,
       attempts: true,
     },
   });
@@ -36,14 +37,14 @@ export async function action({ request }: ActionFunctionArgs) {
     const form = await request.formData();
     const intent = String(form.get("intent") || "retry-job");
     if (intent === "complete-browser-ocr") {
-      const invoiceId = await completeBrowserInvoiceJob({
+      const completed = await completeBrowserInvoiceJob({
         shop: session.shop,
         actor: session.id,
         jobId: String(form.get("jobId") || ""),
         rawText: form.get("rawText"),
         pageCount: Number(form.get("pageCount")),
       });
-      return json({ success: true, invoiceId });
+      return json({ success: true, ...completed });
     }
     if (intent === "fail-browser-ocr") {
       await prisma.invoiceJob.updateMany({

@@ -1,0 +1,11 @@
+BEGIN;
+ALTER TABLE "CostChange" ADD COLUMN "shopCurrency" TEXT;
+ALTER TABLE "CostChange" ADD COLUMN "fxRate" DOUBLE PRECISION;
+ALTER TABLE "CostChange" ADD COLUMN "fxSource" TEXT;
+ALTER TABLE "CostChange" ADD COLUMN "packSize" DOUBLE PRECISION;
+ALTER TABLE "CostChange" ADD COLUMN "creditApplied" DOUBLE PRECISION;
+ALTER TABLE "CostChange" ADD COLUMN "breakdown" JSONB;
+ALTER TABLE "CreditNote" ADD COLUMN "note" TEXT;
+CREATE INDEX "CreditNote_shop_originalInvoiceNumber_idx" ON "CreditNote"("shop", "originalInvoiceNumber");
+ALTER TABLE "CreditNote" ADD CONSTRAINT "CreditNote_invoiceId_fkey" FOREIGN KEY ("invoiceId") REFERENCES "Invoice"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+COMMIT;

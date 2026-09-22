@@ -34,11 +34,14 @@ export default function App() {
           Command Center
         </Link>
         <Link to="/app/invoices">Review Invoices</Link>
+        {(role === "ADMIN" || role === "FINANCE") && (
+          <Link to="/app/credit-notes">Credit notes</Link>
+        )}
         {role === "ADMIN" && (
           <>
             <Link to="/app/reconciliation">Purchase Orders</Link>
             <Link to="/app/analytics">Vendor Analytics</Link>
-            <Link to="/app/reports">Weekly report</Link>
+            <Link to="/app/reports">Vendor reports</Link>
             <Link to="/app/settings">Settings</Link>
           </>
         )}

@@ -6,6 +6,7 @@ import {
 } from "@remix-run/node";
 import {
   Form,
+  Link,
   useActionData,
   useFetcher,
   useLoaderData,
@@ -24,11 +25,38 @@ import {
 } from "@shopify/polaris";
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
-import { getUserRole } from "../utils/rbac.server";
+import {
+  getUserRole,
+  requireApprovalAccess,
+} from "../utils/rbac.server";
 import { invoiceIssues } from "../utils/invoiceRules";
+import { fxSummary, resolveFxRate } from "../utils/exchangeRate";
+import { creditTotals } from "../utils/creditNotes";
+import {
+  approveCreditNote,
+  unmatchCreditNote,
+  voidCreditNote,
+} from "../services/creditNotes.server";
+import { fetchShopCurrency } from "../services/invoiceWorkflow.server";
+import { getExchangeRateOptions } from "../services/exchangeRate.server";
+import { needsPackSize } from "../utils/unitCost";
+import {
+  allocateCharges,
+  allocationSummary,
+  CHARGE_CATEGORIES,
+  CHARGE_CATEGORY_LABELS,
+  isChargeLine,
+  isLandedCostMethod,
+  LANDED_COST_METHOD_LABELS,
+  LANDED_COST_METHODS,
+  landedCostIssues,
+  landedUnitCost,
+  lineValue,
+} from "../utils/landedCost";
 import {
   saveInvoiceReview,
   approveInvoice,
+  variantsByIds,
 } from "../services/invoiceReview.server";
 import {
   prepareCostSync,
@@ -47,8 +75,19 @@ import { livePlatform } from "../services/accountingConnection.server";
 import { deleteCapturedInvoice } from "../services/invoiceDeletion.server";
 import { invoiceDeletionBlockedReason } from "../utils/invoiceDeletion";
 import { CsvDownloadButton } from "../components/CsvDownloadButton";
+import {
+  approvalState,
+  delegateApproval,
+  ensureDefaultApprovalRules,
+} from "../services/approvalRules.server";
+import {
+  normalizeStaffRole,
+  roleCanApprove,
+  ruleRoles,
+} from "../utils/approvalRules";
 export async function loader({ request, params }: LoaderFunctionArgs) {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
+  await ensureDefaultApprovalRules(session.shop);
   const invoice = await prisma.invoice.findFirst({
     where: { id: params.id, shop: session.shop },
     include: {
@@ -57,10 +96,13 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       exports: true,
       costChanges: true,
       purchaseOrder: true,
+      creditNotes: true,
+      approvals: { include: { approvalRule: true } },
     },
   });
   if (!invoice) throw new Response("Invoice not found", { status: 404 });
-  const [role, purchaseOrders, events] = await Promise.all([
+  const shopCurrency = await fetchShopCurrency(admin);
+  const [role, purchaseOrders, events, fxOptions, approval, approvalStaff] = await Promise.all([
     getUserRole(request),
     prisma.purchaseOrder.findMany({
       where: { shop: session.shop },
@@ -72,13 +114,140 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       orderBy: { createdAt: "desc" },
       take: 30,
     }),
+    invoice.currency === shopCurrency
+      ? Promise.resolve([])
+      : getExchangeRateOptions({
+          shop: session.shop,
+          fromCurrency: invoice.currency,
+          toCurrency: shopCurrency,
+          rateDate: invoice.date,
+          allowRemote: true,
+        }),
+    approvalState(prisma, invoice),
+    prisma.session.findMany({
+      where: { shop: session.shop, isOnline: true },
+      select: { id: true, firstName: true, email: true, role: true, accountOwner: true },
+      orderBy: { firstName: "asc" },
+    }),
   ]);
+  const landedCostMethod = isLandedCostMethod(invoice.landedCostMethod)
+    ? invoice.landedCostMethod
+    : "NONE";
+  const productLines = invoice.items.filter((item) => !isChargeLine(item));
+  const chargeTotal = invoice.items
+    .filter((item) => isChargeLine(item))
+    .reduce((sum, item) => sum + lineValue(item), 0);
+  let weights: Record<string, number | null> = {};
+  if (landedCostMethod === "WEIGHT") {
+    const ids = productLines
+      .map((item) => item.shopifyVariantId)
+      .filter((id): id is string => Boolean(id));
+    if (ids.length) {
+      try {
+        const variants = await variantsByIds(admin, ids);
+        weights = Object.fromEntries(
+          variants.map((variant) => {
+            const weight = variant.inventoryItem.measurement?.weight;
+            const multiplier = {
+              GRAMS: 1,
+              KILOGRAMS: 1000,
+              OUNCES: 28.349523125,
+              POUNDS: 453.59237,
+            }[String(weight?.unit || "").toUpperCase()];
+            const quantity =
+              productLines.find(
+                (line) => line.shopifyVariantId === variant.id,
+              )?.quantity || 0;
+            return [
+              variant.id,
+              weight && multiplier
+                ? weight.value * multiplier * quantity
+                : null,
+            ];
+          }),
+        );
+      } catch {
+        weights = {};
+      }
+    }
+  }
+  let landedCost = null;
+  let landedCostError = "";
+  try {
+    if (chargeTotal > 0 && productLines.length) {
+      const result = allocateCharges(
+        productLines.map((item) => ({
+          id: item.id,
+          name: item.name,
+          quantity: item.quantity,
+          price: item.price,
+          amount: item.amount,
+          category: item.category,
+          weight: item.shopifyVariantId
+            ? weights[item.shopifyVariantId] ?? null
+            : null,
+        })),
+        chargeTotal,
+        landedCostMethod,
+        Object.fromEntries(
+          productLines.map((item) => [item.id, item.manualCharge]),
+        ),
+      );
+      const allocatedFor = (id: string) =>
+        result.allocations.find((entry) => entry.lineId === id)?.amount ?? 0;
+      landedCost = {
+        method: result.method,
+        chargeTotal: result.totalCharge,
+        summary: allocationSummary(result),
+        warnings: result.warnings,
+        lines: productLines.map((item) => ({
+          id: item.id,
+          name: item.name,
+          quantity: item.quantity,
+          allocated: allocatedFor(item.id),
+          landedUnitCost: landedUnitCost(item, allocatedFor(item.id)),
+        })),
+      };
+    }
+  } catch (error) {
+    landedCostError =
+      error instanceof Error
+        ? error.message
+        : "The freight allocation could not be calculated.";
+  }
+  const fx = resolveFxRate(invoice.currency, shopCurrency, invoice.fxRate);
+  const credits = creditTotals(invoice.creditNotes);
   return json({
     invoice,
     role,
     purchaseOrders,
     events,
-    issues: invoiceIssues(invoice),
+    landedCost,
+    landedCostError,
+    landedCostMethodWarning:
+      invoice.vendor?.defaultLandedCostMethod &&
+      invoice.vendor.defaultLandedCostMethod !== landedCostMethod
+        ? `This supplier last used ${invoice.vendor.defaultLandedCostMethod}. Review the change to ${landedCostMethod} before approval.`
+        : "",
+    shopCurrency,
+    fxRate: invoice.fxRate,
+    fxProblem: fx.problem,
+    fxRequired: fx.required,
+    fxOptions,
+    credits,
+    approval,
+    approvalStaff,
+    issues: [
+      ...invoiceIssues(invoice),
+      ...landedCostIssues(invoice.items, landedCostMethod),
+      ...(fx.problem ? [fx.problem] : []),
+      ...invoice.creditNotes
+        .filter((credit) => credit.status === "MATCHED")
+        .map(
+          (credit) =>
+            `Credit note ${credit.creditNoteNumber || credit.id.slice(0, 8)} still needs approval or voiding.`,
+        ),
+    ],
   });
 }
 export async function action({ request, params }: ActionFunctionArgs) {
@@ -86,6 +255,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
   const id = params.id || "";
   const intent = String(form.get("intent"));
   try {
+    let message = "Invoice updated.";
     if (intent === "delete") {
       await deleteCapturedInvoice(request, id);
       return redirect("/app/invoices?deleted=1");
@@ -95,14 +265,42 @@ export async function action({ request, params }: ActionFunctionArgs) {
         throw new Error(
           "Confirm the supplier, invoice number, dates, currency and totals against the original before approval.",
         );
-      await approveInvoice(
+      const approval = await approveInvoice(
         request,
         id,
         Number(form.get("revision")),
         String(form.get("exceptionReason") || ""),
       );
+      message = approval.complete
+        ? "All required approvals are complete."
+        : "Your approval was recorded. Additional approval is still required.";
+    } else if (intent === "delegate-approval") {
+      const { session, actor, role } = await requireApprovalAccess(request);
+      await delegateApproval(
+        session.shop,
+        id,
+        String(form.get("ruleId") || ""),
+        actor,
+        String(form.get("targetSessionId") || ""),
+        role,
+      );
+      message = "Approval delegated.";
     } else if (intent === "preview-costs") await prepareCostSync(request, id);
     else if (intent === "sync-costs") await syncApprovedCosts(request, id);
+    else if (intent === "approve-credit")
+      await approveCreditNote(
+        request,
+        String(form.get("creditNoteId")),
+        String(form.get("note") || ""),
+      );
+    else if (intent === "void-credit")
+      await voidCreditNote(
+        request,
+        String(form.get("creditNoteId")),
+        String(form.get("note") || ""),
+      );
+    else if (intent === "unmatch-credit")
+      await unmatchCreditNote(request, String(form.get("creditNoteId")));
     else if (intent === "restore-cost")
       await restoreCost(request, String(form.get("changeId")));
     else if (intent === "verify-cost")
@@ -130,7 +328,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
         livePlatform(String(form.get("platform"))),
       );
     else throw new Error("Unknown invoice action.");
-    return json({ success: true as const, message: "Invoice updated." });
+    return json({ success: true as const, message });
   } catch (error) {
     if (error instanceof Response) throw error;
     return json(
@@ -145,6 +343,10 @@ export async function action({ request, params }: ActionFunctionArgs) {
 type EditorItem = {
   name: string;
   sku: string;
+  category: string;
+  supplierUoM: string;
+  packSize: string;
+  manualCharge: string;
   quantity: string;
   price: string;
   amount: string;
@@ -298,14 +500,46 @@ function InvoiceEditor({
 }: {
   data: ReturnType<typeof useLoaderData<typeof loader>>;
 }) {
-  const { invoice, role, purchaseOrders, events, issues } = data;
+  const {
+    invoice,
+    role,
+    purchaseOrders,
+    events,
+    issues,
+    landedCost,
+    landedCostError,
+    landedCostMethodWarning,
+    shopCurrency,
+    fxRate,
+    fxProblem,
+    fxOptions,
+    credits,
+    approval,
+    approvalStaff,
+  } = data;
   const result = useActionData<typeof action>();
   const busy = useNavigation().state !== "idle";
   const [dirty, setDirty] = useState(false);
+  const [landedCostMethod, setLandedCostMethod] = useState(
+    invoice.landedCostMethod || "NONE",
+  );
+  const [selectedFxRate, setSelectedFxRate] = useState(
+    fxRate == null ? "" : String(fxRate),
+  );
+  const [selectedFxSource, setSelectedFxSource] = useState(
+    invoice.fxRateSource || "MANUAL",
+  );
+  const [selectedFxDate, setSelectedFxDate] = useState(
+    invoice.fxRateDate?.slice(0, 10) || invoice.date.slice(0, 10),
+  );
   const [items, setItems] = useState<EditorItem[]>(
     invoice.items.map((i) => ({
       name: i.name,
       sku: i.sku || "",
+      category: i.category || "PRODUCT",
+      supplierUoM: i.supplierUoM || "",
+      packSize: i.packSize == null ? "" : String(i.packSize),
+      manualCharge: i.manualCharge == null ? "" : String(i.manualCharge),
       quantity: String(i.quantity),
       price: String(i.price),
       amount: String(i.amount ?? i.quantity * i.price),
@@ -331,6 +565,13 @@ function InvoiceEditor({
       old.map((item, i) => (i === index ? { ...item, ...change } : item)),
     );
   };
+  const chargeLines = items.filter((item) => item.category !== "PRODUCT");
+  const productLines = items.filter((item) => item.category === "PRODUCT");
+  const chargeTotal = chargeLines.reduce(
+    (sum, item) =>
+      sum + (Number(item.amount) || Number(item.quantity) * Number(item.price) || 0),
+    0,
+  );
   return (
     <Page
       title={`Invoice ${invoice.invoiceNumber || invoice.id.slice(0, 8)}`}
@@ -478,9 +719,42 @@ function InvoiceEditor({
                         <input
                           value={item.name}
                           onChange={(e) =>
-                            update(index, { name: e.target.value })
+                            update(index, {
+                              name: e.target.value,
+                              ...(item.category === "PRODUCT"
+                                ? { matchConfirmed: false }
+                                : {}),
+                            })
                           }
                         />
+                      </label>
+                      <label>
+                        Line type{" "}
+                        <select
+                          value={item.category}
+                          disabled={locked}
+                          onChange={(e) => {
+                            const category = e.target.value;
+                            update(
+                              index,
+                              category === "PRODUCT"
+                                ? { category }
+                                : {
+                                    category,
+                                    syncCost: false,
+                                    matchConfirmed: false,
+                                    shopifyVariantId: "",
+                                    matchedProductTitle: "",
+                                  },
+                            );
+                          }}
+                        >
+                          {CHARGE_CATEGORIES.map((category) => (
+                            <option key={category} value={category}>
+                              {CHARGE_CATEGORY_LABELS[category]}
+                            </option>
+                          ))}
+                        </select>
                       </label>
                       <label>
                         Supplier SKU{" "}
@@ -529,22 +803,81 @@ function InvoiceEditor({
                           }
                         />
                       </label>
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={item.syncCost}
-                          onChange={(e) =>
-                            update(index, { syncCost: e.target.checked })
-                          }
-                        />{" "}
-                        Include this line in product cost sync
-                      </label>
-                      {item.syncCost && (
-                        <MatchPicker
-                          item={item}
-                          disabled={locked}
-                          update={(change) => update(index, change)}
-                        />
+                      {item.category === "PRODUCT" ? (
+                        <>
+                          <label>
+                            Billed unit (optional){" "}
+                            <input
+                              value={item.supplierUoM}
+                              placeholder="e.g. box, case, each"
+                              maxLength={20}
+                              disabled={locked}
+                              onChange={(e) =>
+                                update(index, {
+                                  supplierUoM: e.target.value
+                                    .toLowerCase()
+                                    .trimStart(),
+                                })
+                              }
+                            />
+                          </label>
+                          {needsPackSize(item.supplierUoM) && (
+                            <label>
+                              Stock units per {item.supplierUoM || "billed unit"}{" "}
+                              <input
+                                type="number"
+                                step="any"
+                                min="0.001"
+                                value={item.packSize}
+                                placeholder="e.g. 12"
+                                disabled={locked}
+                                onChange={(e) =>
+                                  update(index, { packSize: e.target.value })
+                                }
+                              />
+                            </label>
+                          )}
+                          {landedCostMethod === "MANUAL" && (
+                            <label>
+                              Manual share of freight and charges{" "}
+                              <input
+                                type="number"
+                                step="0.01"
+                                min={0}
+                                value={item.manualCharge}
+                                onChange={(e) =>
+                                  update(index, {
+                                    manualCharge: e.target.value,
+                                  })
+                                }
+                                disabled={locked}
+                              />
+                            </label>
+                          )}
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={item.syncCost}
+                              onChange={(e) =>
+                                update(index, { syncCost: e.target.checked })
+                              }
+                            />{" "}
+                            Include this line in product cost sync
+                          </label>
+                          {item.syncCost && (
+                            <MatchPicker
+                              item={item}
+                              disabled={locked}
+                              update={(change) => update(index, change)}
+                            />
+                          )}
+                        </>
+                      ) : (
+                        <Text as="p" tone="subdued">
+                          Charges are spread across the product lines as landed
+                          cost. They are never synced to Shopify as a product
+                          cost.
+                        </Text>
                       )}
                       <Button
                         disabled={locked || items.length <= 1}
@@ -567,6 +900,10 @@ function InvoiceEditor({
                       {
                         name: "",
                         sku: "",
+                        category: "PRODUCT",
+                        supplierUoM: "",
+                        packSize: "",
+                        manualCharge: "",
                         quantity: "1",
                         price: "0",
                         amount: "0",
@@ -617,6 +954,196 @@ function InvoiceEditor({
                     disabled={locked}
                   />
                 </label>
+                {invoice.currency !== shopCurrency && (
+                  <div
+                    style={{
+                      border: "1px solid #e3e3e3",
+                      borderRadius: 8,
+                      padding: 12,
+                    }}
+                  >
+                    <BlockStack gap="200">
+                      <Text as="h3" variant="headingSm">
+                        Currency conversion
+                      </Text>
+                      <Text as="p" tone="subdued">
+                        This invoice is in {invoice.currency}, but Shopify
+                        inventory costs are always written in {shopCurrency}.
+                        Enter the rate you reviewed before this invoice can be
+                        approved or synced.
+                      </Text>
+                      {fxOptions.length > 0 && (
+                        <label>
+                          Saved or provider rate{" "}
+                          <select
+                            value={`${selectedFxSource}|${selectedFxDate}|${selectedFxRate}`}
+                            onChange={(event) => {
+                              if (!event.target.value) return;
+                              const [source, rateDate, rate] =
+                                event.target.value.split("|");
+                              setDirty(true);
+                              setSelectedFxSource(source);
+                              setSelectedFxDate(rateDate);
+                              setSelectedFxRate(rate);
+                            }}
+                          >
+                            <option value="">Choose a stored rate</option>
+                            {fxOptions.map((option) => (
+                              <option
+                                key={`${option.source}-${option.rateDate}-${option.rate}`}
+                                value={`${option.source}|${option.rateDate}|${option.rate}`}
+                              >
+                                {option.source} - {option.rate} on{" "}
+                                {option.rateDate}
+                                {option.nearestPrior ? " (nearest prior)" : ""}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                      <input
+                        type="hidden"
+                        name="fxSource"
+                        value={selectedFxSource}
+                      />
+                      <label>
+                        1 {invoice.currency} ={" "}
+                        <input
+                          name="fxRate"
+                          type="number"
+                          step="any"
+                          min="0.000001"
+                          value={selectedFxRate}
+                          onChange={(event) => {
+                            setDirty(true);
+                            setSelectedFxSource("MANUAL");
+                            setSelectedFxRate(event.target.value);
+                          }}
+                          disabled={locked}
+                        />{" "}
+                        {shopCurrency}
+                      </label>
+                      <label>
+                        Rate date{" "}
+                        <input
+                          name="fxRateDate"
+                          type="date"
+                          value={selectedFxDate}
+                          onChange={(event) => {
+                            setDirty(true);
+                            setSelectedFxDate(event.target.value);
+                          }}
+                          disabled={locked}
+                        />
+                      </label>
+                      {fxProblem ? (
+                        <Banner tone="warning">{fxProblem}</Banner>
+                      ) : fxRate != null ? (
+                        <Text as="p">
+                          {fxSummary(
+                            invoice.currency,
+                            shopCurrency,
+                            fxRate,
+                            invoice.fxRateDate?.slice(0, 10) || null,
+                          )}
+                        </Text>
+                      ) : null}
+                    </BlockStack>
+                  </div>
+                )}
+                {chargeLines.length > 0 && (
+                  <div
+                    style={{
+                      border: "1px solid #e3e3e3",
+                      borderRadius: 8,
+                      padding: 12,
+                    }}
+                  >
+                    <BlockStack gap="200">
+                      <Text as="h3" variant="headingSm">
+                        Freight, duty and landed cost
+                      </Text>
+                      <Text as="p" tone="subdued">
+                        {chargeLines.length} charge line
+                        {chargeLines.length === 1 ? "" : "s"} totalling{" "}
+                        {chargeTotal.toFixed(2)} {invoice.currency}. Choose how
+                        they are spread over the {productLines.length} product
+                        line{productLines.length === 1 ? "" : "s"} before
+                        previewing costs.
+                      </Text>
+                      <label>
+                        Allocation method{" "}
+                        <select
+                          name="landedCostMethod"
+                          value={landedCostMethod}
+                          disabled={locked}
+                          onChange={(e) => {
+                            setDirty(true);
+                            setLandedCostMethod(e.target.value);
+                          }}
+                        >
+                          {LANDED_COST_METHODS.map((method) => (
+                            <option key={method} value={method}>
+                              {LANDED_COST_METHOD_LABELS[method]}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      {landedCostError && (
+                        <Banner tone="critical">{landedCostError}</Banner>
+                      )}
+                      {landedCostMethodWarning && (
+                        <Banner tone="warning">
+                          {landedCostMethodWarning}
+                        </Banner>
+                      )}
+                      {landedCost && (
+                        <>
+                          <Text as="p">{landedCost.summary}</Text>
+                          {landedCost.warnings.map((warning) => (
+                            <Text as="p" key={warning} tone="subdued">
+                              {warning}
+                            </Text>
+                          ))}
+                          <table
+                            style={{
+                              width: "100%",
+                              borderCollapse: "collapse",
+                            }}
+                          >
+                            <thead>
+                              <tr>
+                                <th align="left">Product line</th>
+                                <th align="right">Qty</th>
+                                <th align="right">Allocated charge</th>
+                                <th align="right">Landed cost per unit</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {landedCost.lines.map((line) => (
+                                <tr key={line.id}>
+                                  <td>{line.name}</td>
+                                  <td align="right">{line.quantity}</td>
+                                  <td align="right">
+                                    {line.allocated.toFixed(2)}
+                                  </td>
+                                  <td align="right">
+                                    {line.landedUnitCost.toFixed(4)}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                          <Text as="p" tone="subdued">
+                            The landed cost per unit is what SmartBill writes to
+                            Shopify as the variant cost. This preview reflects
+                            the saved invoice, so save corrections first.
+                          </Text>
+                        </>
+                      )}
+                    </BlockStack>
+                  </div>
+                )}
                 <Button
                   submit
                   variant="primary"
@@ -627,18 +1154,175 @@ function InvoiceEditor({
                 </Button>
                 <Text as="p" tone="subdued">
                   Saving corrections resets approval. Use net prices after
-                  discounts and enter freight as a separate line.
+                  discounts. Tag freight, duty or handling lines as charges so
+                  they become landed cost instead of product costs.
                 </Text>
               </BlockStack>
             </Form>
           </Card>
         </div>
-        {role === "ADMIN" && (
-          <Card>
-            <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">
-                Approval and export
+        <Card>
+          <BlockStack gap="300">
+            <Text as="h2" variant="headingMd">
+              Supplier credit notes
+            </Text>
+            {invoice.creditNotes.length === 0 ? (
+              <Text as="p" tone="subdued">
+                No credit notes are linked to this invoice. Record one so
+                returns, overcharges or allowances reduce the cost SmartBill
+                writes to Shopify.
               </Text>
+            ) : (
+              <>
+                <Text as="p">
+                  Credits reduce the cost of the product lines below. Net
+                  invoice value:{" "}
+                  {formatMoney(invoice.total - credits.total, invoice.currency)}
+                </Text>
+                {invoice.creditNotes.map((credit) => (
+                  <BlockStack gap="100" key={credit.id}>
+                    <InlineStack gap="200">
+                      <Link to={`/app/credit-notes/${credit.id}`}>
+                        {credit.creditNoteNumber || credit.id.slice(0, 8)}
+                      </Link>
+                      <Text as="span">
+                        {formatMoney(credit.amount, credit.currency)}
+                      </Text>
+                      <Badge
+                        tone={
+                          credit.status === "APPLIED"
+                            ? "success"
+                            : credit.status === "VOID"
+                              ? "critical"
+                              : "attention"
+                        }
+                      >
+                        {credit.status}
+                      </Badge>
+                    </InlineStack>
+                    {(role === "ADMIN" || role === "FINANCE") && (
+                      <InlineStack gap="200">
+                        {credit.status === "MATCHED" && (
+                          <Form method="post">
+                            <input
+                              type="hidden"
+                              name="intent"
+                              value="approve-credit"
+                            />
+                            <input
+                              type="hidden"
+                              name="creditNoteId"
+                              value={credit.id}
+                            />
+                            <Button submit loading={busy}>
+                              Approve credit
+                            </Button>
+                          </Form>
+                        )}
+                        {credit.status !== "APPLIED" &&
+                          credit.status !== "VOID" && (
+                            <Form method="post">
+                              <input
+                                type="hidden"
+                                name="intent"
+                                value="void-credit"
+                              />
+                              <input
+                                type="hidden"
+                                name="creditNoteId"
+                                value={credit.id}
+                              />
+                              <Button submit tone="critical" loading={busy}>
+                                Void
+                              </Button>
+                            </Form>
+                          )}
+                      </InlineStack>
+                    )}
+                  </BlockStack>
+                ))}
+              </>
+            )}
+            <InlineStack gap="200">
+              <Button url="/app/credit-notes">Record or match a credit note</Button>
+            </InlineStack>
+          </BlockStack>
+        </Card>
+        <Card>
+          <BlockStack gap="300">
+            <Text as="h2" variant="headingMd">
+              Approval workflow
+            </Text>
+            {approval.requirements.map((rule) => {
+              const approvedBy = new Set(
+                approval.approvals
+                  .filter(
+                    (entry) =>
+                      entry.approvalRuleId === rule.id &&
+                      entry.status === "APPROVED" &&
+                      entry.approverId,
+                  )
+                  .map((entry) => entry.approverId),
+              ).size;
+              const eligible = roleCanApprove(role, ruleRoles(rule));
+              const delegates = approvalStaff.filter((staff) =>
+                roleCanApprove(
+                  staff.accountOwner
+                    ? "ADMIN"
+                    : normalizeStaffRole(staff.role),
+                  ruleRoles(rule),
+                ),
+              );
+              return (
+                <BlockStack gap="100" key={rule.id}>
+                  <InlineStack gap="200" blockAlign="center">
+                    <Text as="p">
+                      {rule.name}: {approvedBy} / {rule.requiredApprovers}
+                    </Text>
+                    <Badge
+                      tone={
+                        approvedBy >= rule.requiredApprovers
+                          ? "success"
+                          : "attention"
+                      }
+                    >
+                      {approvedBy >= rule.requiredApprovers
+                        ? "Complete"
+                        : "Pending"}
+                    </Badge>
+                  </InlineStack>
+                  {eligible &&
+                    approvedBy < rule.requiredApprovers &&
+                    delegates.length > 0 && (
+                      <Form method="post">
+                        <input
+                          type="hidden"
+                          name="intent"
+                          value="delegate-approval"
+                        />
+                        <input type="hidden" name="ruleId" value={rule.id} />
+                        <label>
+                          Delegate to{" "}
+                          <select name="targetSessionId" required>
+                            <option value="">Choose teammate</option>
+                            {delegates.map((staff) => (
+                              <option key={staff.id} value={staff.id}>
+                                {staff.email || staff.firstName || staff.id}
+                              </option>
+                            ))}
+                          </select>
+                        </label>{" "}
+                        <Button submit loading={busy}>
+                          Assign
+                        </Button>
+                      </Form>
+                    )}
+                </BlockStack>
+              );
+            })}
+            {approval.requirements.some((rule) =>
+              roleCanApprove(role, ruleRoles(rule)),
+            ) && (
               <Form method="post">
                 <input type="hidden" name="intent" value="approve" />
                 <input type="hidden" name="revision" value={invoice.revision} />
@@ -667,10 +1351,12 @@ function InvoiceEditor({
                   Approve saved invoice
                 </Button>
               </Form>
-              <Text as="p" tone="subdued">
-                Save changes before approving. Approval applies to the saved
-                invoice shown above.
-              </Text>
+            )}
+            <Text as="p" tone="subdued">
+              Save changes before approving. Every required rule must have
+              enough distinct approvers before cost sync or export is enabled.
+            </Text>
+            {role === "ADMIN" && (
               <InlineStack gap="300">
                 <Button
                   url={`/app/invoices/${invoice.id}/accounting?platform=XERO`}
@@ -708,9 +1394,9 @@ function InvoiceEditor({
                   Download approved CSV
                 </CsvDownloadButton>
               </InlineStack>
-            </BlockStack>
-          </Card>
-        )}
+            )}
+          </BlockStack>
+        </Card>
         {invoice.costChanges.length > 0 && (
           <Card>
             <BlockStack gap="300">

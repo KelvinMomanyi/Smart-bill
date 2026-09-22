@@ -35,18 +35,23 @@ model Session {
 }
 
 model Vendor {
-  id              String          @id @default(uuid())
-  shop            String
-  name            String
-  address         String?
-  email           String?
-  phone           String?
-  paymentTerms    String?
-  defaultCurrency String?         @default("USD")
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
-  invoices        Invoice[]
-  purchaseOrders  PurchaseOrder[]
+  id                      String          @id @default(uuid())
+  shop                    String
+  name                    String
+  address                 String?
+  email                   String?
+  phone                   String?
+  paymentTerms            String?
+  defaultCurrency         String?         @default("USD")
+  createdAt               DateTime        @default(now())
+  updatedAt               DateTime        @updatedAt
+  invoices                Invoice[]
+  purchaseOrders          PurchaseOrder[]
+  creditNotes             CreditNote[]
+  freightLines            FreightLine[]
+  uomMappings             UoMMapping[]
+  approvalRules           ApprovalRule[]
+  defaultLandedCostMethod String?
 
   @@unique([shop, name])
 }
@@ -88,12 +93,12 @@ model PurchaseOrderItem {
 }
 
 model Invoice {
-  id                 String             @id @default(uuid())
+  id                 String         @id @default(uuid())
   shop               String
   vendorId           String?
-  vendor             Vendor?            @relation(fields: [vendorId], references: [id])
+  vendor             Vendor?        @relation(fields: [vendorId], references: [id])
   purchaseOrderId    String?
-  purchaseOrder      PurchaseOrder?     @relation(fields: [purchaseOrderId], references: [id])
+  purchaseOrder      PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
   invoiceNumber      String?
   imageUrl           String
   storageKey         String?
@@ -101,26 +106,39 @@ model Invoice {
   rawText            String?
   date               DateTime
   dueDate            DateTime?
-  currency           String             @default("USD")
+  currency           String         @default("USD")
   subtotal           Float?
   tax                Float?
   total              Float
-  status             String             @default("PENDING_SYNC") // PENDING_SYNC, SYNCED
-  reviewStatus       String             @default("PENDING_REVIEW") // PENDING_REVIEW, NEEDS_ATTENTION, APPROVED
-  cogsSyncStatus     String             @default("NOT_REQUESTED") // NOT_REQUESTED, SYNCED, FAILED
-  accountingStatus   String             @default("NOT_EXPORTED") // NOT_EXPORTED, EXPORTED
+  status             String         @default("PENDING_SYNC") // PENDING_SYNC, SYNCED
+  reviewStatus       String         @default("PENDING_REVIEW") // PENDING_REVIEW, NEEDS_ATTENTION, APPROVED
+  cogsSyncStatus     String         @default("NOT_REQUESTED") // NOT_REQUESTED, SYNCED, FAILED
+  accountingStatus   String         @default("NOT_EXPORTED") // NOT_EXPORTED, EXPORTED
   discrepancySummary String?
   documentHash       String?
   identityKey        String?
-  approvedAt         DateTime?
-  approvedBy         String?
-  revision           Int                @default(0)
-  accountingMapping  Json?
-  exports            AccountingExport[]
-  costChanges        CostChange[]
-  createdAt          DateTime           @default(now())
-  updatedAt          DateTime           @updatedAt
-  items              InvoiceItem[]
+  landedCostMethod   String         @default("NONE") // NONE, VALUE, QUANTITY, WEIGHT, MANUAL
+
+  landedCostUpdatedAt DateTime?
+  fxRate              Float? // Reviewed rate from the invoice currency into the shop currency
+  fxRateSource        String? // MANUAL or SHOP_CURRENCY
+  fxRateDate          DateTime?
+  shopCurrency        String?
+  costInShopCurrency  Float?
+  approvedAt          DateTime?
+  approvedBy          String?
+  revision            Int                    @default(0)
+  accountingMapping   Json?
+  exports             AccountingExport[]
+  costChanges         CostChange[]
+  creditNotes         CreditNote[]
+  creditAllocations   CreditNoteAllocation[] @relation("CreditTargetInvoice")
+  freightLines        FreightLine[]
+  fxAdjustments       FXAdjustment[]
+  approvals           Approval[]
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+  items               InvoiceItem[]
 
   @@unique([shop, documentHash])
   @@unique([shop, identityKey])
@@ -128,20 +146,29 @@ model Invoice {
 }
 
 model InvoiceItem {
-  id                  String  @id @default(uuid())
+  id                  String              @id @default(uuid())
   invoiceId           String
-  invoice             Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  invoice             Invoice             @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   shopifyProductId    String? // Mapped Shopify Product ID
   shopifyVariantId    String? // Mapped Shopify Variant ID
   sku                 String?
   name                String
-  quantity            Float   @default(1)
+  category            String              @default("PRODUCT") // PRODUCT, FREIGHT, DUTY, HANDLING, INSURANCE, OTHER
+  manualCharge        Float? // Manual share of freight and charges for this product line
+  supplierUoM         String? // Unit the supplier billed in, when the line states one
+  packSize            Float? // Stock units per billed unit, snapshotted for the sync
+  convertedQuantity   Float?
+  costPerStockUnit    Float?
+  landedCostPerUnit   Float?
+  quantity            Float               @default(1)
   price               Float // Unit price (Rate)
   amount              Float? // Total amount for this line item
   confidence          Float?
   matchedProductTitle String?
-  matchConfirmed      Boolean @default(false)
-  syncCost            Boolean @default(true)
+  matchConfirmed      Boolean             @default(false)
+  syncCost            Boolean             @default(true)
+  freightAllocations  FreightAllocation[]
+  creditNoteLines     CreditNoteLine[]
 }
 
 model ShopSettings {
@@ -161,6 +188,11 @@ model ShopSettings {
   quickBooksTaxAccountId String?
   inboundAlias           String?  @unique
   minutesSavedPerInvoice Float    @default(0)
+  fxRateSourcePreference String   @default("OPENEXCHANGERATES")
+  fxRevaluationFrequency String   @default("MANUAL")
+  fxGainAccount          String?
+  fxLossAccount          String?
+  fxRateRounding         Int      @default(6)
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
 }
@@ -190,24 +222,277 @@ model AccountingExport {
 }
 
 model CostChange {
-  id              String   @id @default(uuid())
-  shop            String
-  invoiceId       String
-  invoice         Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  invoiceItemId   String
-  inventoryItemId String
-  variantId       String
-  previousCost    Float?
-  newCost         Float
-  currency        String
-  status          String   @default("PENDING")
-  actor           String
-  error           String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id                String   @id @default(uuid())
+  shop              String
+  invoiceId         String
+  invoice           Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  invoiceItemId     String
+  inventoryItemId   String
+  variantId         String
+  previousCost      Float?
+  newCost           Float
+  landedCostPerUnit Float?
+  allocation        Json?
+  shopCurrency      String?
+  fxRate            Float?
+  fxSource          String?
+  packSize          Float?
+  creditApplied     Float?
+  breakdown         Json?
+  currency          String
+  status            String   @default("PENDING")
+  actor             String
+  error             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   @@unique([invoiceId, invoiceItemId])
   @@index([shop, createdAt])
+}
+
+model CreditNote {
+  id                    String                 @id @default(uuid())
+  shop                  String
+  vendorId              String?
+  vendor                Vendor?                @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  invoiceId             String?
+  invoice               Invoice?               @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  creditNoteNumber      String?
+  originalInvoiceNumber String?
+  amount                Float
+  currency              String                 @default("USD")
+  reason                String                 @default("OTHER") // RETURN, OVERCHARGE, DISCOUNT, ALLOWANCE, DAMAGE, OTHER
+  status                String                 @default("PENDING") // PENDING, MATCHED, APPROVED, APPLIED, VOID
+  dateIssued            DateTime?
+  dateReceived          DateTime?
+  documentHash          String?
+  storageKey            String?
+  sourceFilename        String?
+  rawText               String?
+  allocation            Json?
+  actor                 String
+  approvedAt            DateTime?
+  appliedAt             DateTime?
+  note                  String?
+  accountingPlatform    String?
+  accountingReference   String?
+  accountingError       String?
+  accountedAt           DateTime?
+  accountingStatus      String                 @default("NOT_POSTED")
+  accountingRequestKey  String?
+  lines                 CreditNoteLine[]
+  allocations           CreditNoteAllocation[]
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+
+  @@unique([shop, documentHash])
+  @@index([shop, status])
+  @@index([invoiceId])
+  @@index([vendorId])
+  @@index([shop, originalInvoiceNumber])
+}
+
+model CreditNoteLine {
+  id             String       @id @default(uuid())
+  creditNoteId   String
+  creditNote     CreditNote   @relation(fields: [creditNoteId], references: [id], onDelete: Cascade)
+  invoiceLineId  String?
+  invoiceLine    InvoiceItem? @relation(fields: [invoiceLineId], references: [id], onDelete: SetNull)
+  description    String
+  quantity       Float
+  unitPrice      Float
+  lineAmount     Float
+  originalLineId String?
+
+  @@index([creditNoteId])
+  @@index([invoiceLineId])
+}
+
+model CreditNoteAllocation {
+  id               String     @id @default(uuid())
+  creditNoteId     String
+  creditNote       CreditNote @relation(fields: [creditNoteId], references: [id], onDelete: Cascade)
+  targetInvoiceId  String
+  targetInvoice    Invoice    @relation("CreditTargetInvoice", fields: [targetInvoiceId], references: [id], onDelete: Cascade)
+  allocatedAmount  Float
+  allocationDate   DateTime   @default(now())
+  allocationReason String?
+
+  @@unique([creditNoteId, targetInvoiceId])
+  @@index([targetInvoiceId])
+}
+
+model FreightLine {
+  id            String              @id @default(uuid())
+  invoiceId     String
+  invoice       Invoice             @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  invoiceItemId String?             @unique
+  supplierId    String?
+  supplier      Vendor?             @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  description   String
+  amount        Float
+  currency      String
+  category      String
+  allocations   FreightAllocation[]
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  @@index([invoiceId])
+  @@index([supplierId])
+}
+
+model FreightAllocation {
+  id               String      @id @default(uuid())
+  freightLineId    String
+  freightLine      FreightLine @relation(fields: [freightLineId], references: [id], onDelete: Cascade)
+  invoiceLineId    String
+  invoiceLine      InvoiceItem @relation(fields: [invoiceLineId], references: [id], onDelete: Cascade)
+  allocationMethod String
+  allocatedAmount  Float
+  allocationReason String?
+  calculatedBy     String
+  allocationDate   DateTime    @default(now())
+  adjustedManually Boolean     @default(false)
+
+  @@unique([freightLineId, invoiceLineId])
+  @@index([invoiceLineId])
+}
+
+model ExchangeRate {
+  id               String   @id @default(uuid())
+  shop             String
+  fromCurrency     String
+  toCurrency       String
+  rateDate         DateTime
+  rate             Float
+  source           String
+  confidence       Int
+  appliedToInvoice Int      @default(0)
+  createdAt        DateTime @default(now())
+
+  @@unique([shop, fromCurrency, toCurrency, rateDate, source])
+  @@index([shop, fromCurrency, toCurrency, rateDate])
+}
+
+model FXAdjustment {
+  id              String   @id @default(uuid())
+  invoiceId       String
+  invoice         Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  fromCurrency    String
+  toCurrency      String
+  invoiceAmount   Float
+  convertedAmount Float
+  rateUsed        Float
+  rateDate        DateTime
+  rateDifference  Float?
+  reason          String
+  source          String
+  createdAt       DateTime @default(now())
+
+  @@index([invoiceId, createdAt])
+}
+
+model UoMMapping {
+  id               String   @id @default(uuid())
+  shop             String
+  supplierId       String
+  supplier         Vendor   @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  itemKey          String
+  supplierUoM      String
+  stockUoM         String
+  conversionFactor Float
+  confidence       String
+  lastUsed         DateTime @default(now())
+  frequency        Int      @default(1)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([shop, supplierId, itemKey, supplierUoM, stockUoM])
+  @@index([shop, supplierId])
+}
+
+model ApprovalRule {
+  id                       String     @id @default(uuid())
+  shop                     String
+  name                     String
+  invoiceAmountMin         Float?
+  invoiceAmountMax         Float?
+  supplierId               String?
+  supplier                 Vendor?    @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  requiredApprovers        Int        @default(1)
+  approverRoles            Json
+  escalateIfUnresolvedDays Int        @default(3)
+  active                   Boolean    @default(true)
+  approvals                Approval[]
+  createdAt                DateTime   @default(now())
+  updatedAt                DateTime   @updatedAt
+
+  @@unique([shop, name])
+  @@index([shop, active])
+}
+
+model Approval {
+  id             String       @id @default(uuid())
+  invoiceId      String
+  invoice        Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  approvalRuleId String
+  approvalRule   ApprovalRule @relation(fields: [approvalRuleId], references: [id], onDelete: Cascade)
+  approverId     String?
+  assignedTo     String?
+  approvedAt     DateTime?
+  status         String       @default("PENDING")
+  comments       String?
+  escalated      Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([invoiceId, status])
+  @@index([assignedTo, status])
+  @@index([invoiceId, approvalRuleId, approverId])
+}
+
+model NotificationPreference {
+  id                String   @id @default(uuid())
+  shop              String
+  channel           String
+  webhookUrl        String?
+  emailAddress      String?
+  enabled           Boolean  @default(true)
+  notificationTypes Json
+  frequency         String   @default("IMMEDIATE")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([shop, channel])
+}
+
+model NotificationLog {
+  id             String    @id @default(uuid())
+  shop           String
+  type           String
+  target         String
+  status         String
+  sentAt         DateTime?
+  deliveryStatus String?
+  attempts       Int       @default(0)
+  error          String?
+  createdAt      DateTime  @default(now())
+
+  @@index([shop, createdAt])
+}
+
+model ReportingSnapshot {
+  id          String   @id @default(uuid())
+  shop        String
+  periodStart DateTime
+  periodEnd   DateTime
+  periodType  String
+  data        Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([shop, periodStart, periodEnd, periodType])
+  @@index([shop, periodType, periodStart])
 }
 
 model AuditEvent {
@@ -224,13 +509,17 @@ model AuditEvent {
 }
 
 model SupplierMapping {
-  id        String   @id @default(uuid())
-  shop      String
-  vendorKey String
-  itemKey   String
-  variantId String
-  title     String
-  updatedAt DateTime @updatedAt
+  id                 String   @id @default(uuid())
+  shop               String
+  vendorKey          String
+  itemKey            String
+  variantId          String
+  title              String
+  packSize           Float? // Remembered pack size for this supplier item
+  supplierUoM        String?
+  packUnitOfMeasure  String?
+  stockUnitOfMeasure String?
+  updatedAt          DateTime @updatedAt
 
   @@unique([shop, vendorKey, itemKey])
 }
@@ -271,6 +560,7 @@ model InvoiceJob {
   pageCount       Int       @default(0)
   attempts        Int       @default(0)
   invoiceId       String?
+  creditNoteId    String?
   error           String?
   availableAt     DateTime  @default(now())
   lockedAt        DateTime?

@@ -104,6 +104,7 @@ function mockWorkflow(
         : entry[key] === value,
     );
   mockTransaction(t);
+  replaceMethod(t, prisma.notificationPreference, "findMany", async () => []);
   replaceMethod(t, prisma.invoice, "findFirst", async () =>
     structuredClone({ ...invoice, exports: entries }),
   );

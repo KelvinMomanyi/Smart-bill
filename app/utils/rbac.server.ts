@@ -1,5 +1,6 @@
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+import { normalizeStaffRole } from "./approvalRules";
 
 export async function requireAdmin(request: Request) {
   const context = await authenticate.admin(request);
@@ -29,5 +30,27 @@ export async function getUserRole(request: Request) {
     return "ADMIN";
   }
 
-  return "SCANNER";
+  return normalizeStaffRole(dbSession?.role);
+}
+
+export async function requireApprovalAccess(request: Request) {
+  const context = await authenticate.admin(request);
+  const { session } = context;
+  const dbSession = await prisma.session.findUnique({ where: { id: session.id } });
+  const actor = String(
+    session.onlineAccessInfo?.associated_user.id || session.id,
+  );
+  const role = session.onlineAccessInfo?.associated_user.account_owner
+    ? "ADMIN"
+    : normalizeStaffRole(dbSession?.role);
+  if (!session.isOnline)
+    throw new Response("Unauthorized: staff session required", { status: 403 });
+  return { ...context, dbSession, actor, role };
+}
+
+export async function requireFinanceAccess(request: Request) {
+  const context = await requireApprovalAccess(request);
+  if (context.role !== "ADMIN" && context.role !== "FINANCE")
+    throw new Response("Unauthorized: finance approval required", { status: 403 });
+  return context;
 }

@@ -155,15 +155,15 @@ test("browser PDFs render at 2x and reuse one worker for every page", async () =
   assert.equal(mock.destroyed(), true);
 });
 
-test("browser PDFs over five pages fail without silently dropping pages", async () => {
-  const mock = fakeRuntime(6);
+test("browser PDFs over ten pages fail without silently dropping pages", async () => {
+  const mock = fakeRuntime(11);
   await assert.rejects(
     processInvoiceInBrowser(
       new File(["%PDF-"], "invoice.pdf", { type: "application/pdf" }),
       () => {},
       mock.runtime,
     ),
-    /5-page/,
+    /10-page/,
   );
   assert.equal(mock.calls.length, 0);
   assert.equal(mock.destroyed(), true);
@@ -269,7 +269,7 @@ test("OCR sizing and quality scoring favor readable invoice amounts", () => {
 });
 
 test("browser OCR rejects malformed results and accepts legacy BMP uploads", () => {
-  for (const pageCount of [0, 6, 1.5, NaN, "1"])
+  for (const pageCount of [0, 11, 1.5, NaN, "1"])
     assert.throws(() => validateBrowserOcrText("Invoice text", pageCount));
   for (const rawText of ["", " ".repeat(10), "x".repeat(200001), {}])
     assert.throws(() => validateBrowserOcrText(rawText, 1));

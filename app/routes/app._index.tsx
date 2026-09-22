@@ -68,6 +68,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         pageCount: true,
         error: true,
         invoiceId: true,
+        creditNoteId: true,
       },
     }),
     prisma.invoiceJob.count({
@@ -144,7 +145,9 @@ export async function action({ request }: ActionFunctionArgs) {
     });
     return json({
       success: true as const,
-      message: `Invoice ${result.invoice.invoiceNumber || result.invoice.id} saved for review.`,
+      message: result.creditNote
+        ? `Credit note ${result.creditNote.creditNoteNumber || result.creditNote.id.slice(0, 8)} saved. Match it to the invoice it credits.`
+        : `Invoice ${result.invoice!.invoiceNumber || result.invoice!.id} saved for review.`,
     });
   } catch (error) {
     if (error instanceof Response) throw error;
@@ -287,7 +290,7 @@ export default function Dashboard() {
                   />
                 </label>
                 <Text as="p" tone="subdued">
-                  PDFs and images, up to 10 MB and 5 pages each. Growth supports
+                  PDFs and images, up to 10 MB and 10 pages each. Growth supports
                   batches of up to 10 documents. Recognition runs on your
                   device; keep this page open until saving completes.
                 </Text>
@@ -361,6 +364,11 @@ export default function Dashboard() {
                   {job.invoiceId && (
                     <Link to={`/app/invoices/${job.invoiceId}`}>
                       Review invoice
+                    </Link>
+                  )}
+                  {job.creditNoteId && (
+                    <Link to={`/app/credit-notes/${job.creditNoteId}`}>
+                      Review credit note
                     </Link>
                   )}
                   {["FAILED", "QUEUED", "AWAITING_OCR", "PROCESSING"].includes(

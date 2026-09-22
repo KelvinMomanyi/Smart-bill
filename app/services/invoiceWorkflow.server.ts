@@ -6,9 +6,15 @@ import { parseInvoiceText } from "../utils/parser.server";
 import {
   invoiceIssues,
   normalizedKey,
+  roundMoney,
   supplierItemKey,
   currencyTotals,
 } from "../utils/invoiceRules";
+import { detectCreditReason } from "../utils/creditNotes";
+import {
+  findInvoiceForCredit,
+  invalidateInvoiceForCredit,
+} from "./creditNotes.server";
 import {
   requireSubscription,
   reserveInvoiceUsage,
@@ -16,6 +22,8 @@ import {
 } from "./billing.server";
 import { reconcileInvoiceWithPO } from "./poReconciliation.server";
 import { SHOP_CURRENCY_QUERY } from "../utils/shopifyQueries";
+import { syncFreightLines } from "./freightAllocation.server";
+import { notifySafely } from "./notifications.server";
 export { formatMoney } from "../utils/format";
 
 export function hashText(value: string) {
@@ -127,6 +135,16 @@ export async function persistCapturedInvoice(input: Capture) {
     throw new Error("Purchase order not found in this store.");
   const documentHash =
     input.documentHash || hashText(normalizedKey(input.rawText));
+  // A supplier credit is a different document: it never becomes an invoice,
+  // and it only ever reduces the cost of the invoice it credits.
+  if (parsed.isCreditDocument)
+    return persistCapturedCreditNote({
+      ...input,
+      shop,
+      vendorName,
+      documentHash,
+      parsed,
+    });
   const identityKey = invoiceIdentity(vendorName, parsed.invoiceNumber);
   const duplicate = await prisma.invoice.findFirst({
     where: {
@@ -154,20 +172,53 @@ export async function persistCapturedInvoice(input: Capture) {
     throw new Error(
       `Duplicate invoice: ${duplicate.invoiceNumber || duplicate.id} is already captured.`,
     );
-  const mappings = await prisma.supplierMapping.findMany({
-    where: { shop, vendorKey: normalizedKey(vendorName) },
+  const knownVendor = await prisma.vendor.findFirst({
+    where: { shop, name: { equals: vendorName, mode: "insensitive" } },
   });
+  const [mappings, uomMappings] = await Promise.all([
+    prisma.supplierMapping.findMany({
+      where: { shop, vendorKey: normalizedKey(vendorName) },
+    }),
+    knownVendor
+      ? prisma.uoMMapping.findMany({
+          where: { shop, supplierId: knownVendor.id },
+        })
+      : Promise.resolve([]),
+  ]);
   const items = parsed.items.map((item) => {
-    const mapping = mappings.find((m) => m.itemKey === supplierItemKey(item));
+    const category = item.category || "PRODUCT";
+    const charge = category !== "PRODUCT";
+    const mapping = charge
+      ? undefined
+      : mappings.find((m) => m.itemKey === supplierItemKey(item));
+    const uomMapping = charge
+      ? undefined
+      : uomMappings.find(
+          (candidate) =>
+            candidate.itemKey === supplierItemKey(item) &&
+            candidate.supplierUoM === item.supplierUoM,
+        );
     return {
       sku: item.sku || null,
       name: item.name,
+      category,
+      // Snapshotted from the document so the pack size survives later edits.
+      supplierUoM: charge ? null : item.supplierUoM || null,
+      packSize: charge
+        ? null
+        : item.packSize ||
+          uomMapping?.conversionFactor ||
+          (item.supplierUoM && item.supplierUoM === mapping?.supplierUoM
+            ? mapping.packSize
+            : null),
       price: item.price,
       quantity: item.quantity,
       amount: item.amount,
       shopifyVariantId: mapping?.variantId,
       matchedProductTitle: mapping?.title,
       matchConfirmed: false,
+      // Freight, duty and handling lines are charges, never stock.
+      syncCost: !charge,
     };
   });
   const issues = [
@@ -216,6 +267,7 @@ export async function persistCapturedInvoice(input: Capture) {
         },
         include: { items: true, vendor: true, purchaseOrder: true },
       });
+      await syncFreightLines(tx, created);
       await tx.auditEvent.create({
         data: {
           shop,
@@ -239,8 +291,46 @@ export async function persistCapturedInvoice(input: Capture) {
         );
       }
     }
+    await notifySafely("INVOICE_UPLOADED", shop, {
+      invoiceId: invoice.id,
+      invoiceNumber: invoice.invoiceNumber,
+      supplier: invoice.vendor?.name,
+      amount: invoice.total,
+      currency: invoice.currency,
+      message: "Review needed",
+    });
+    const confidenceValues = parsed.items
+      .map((item) => item.confidence)
+      .filter((value): value is number => Number.isFinite(value));
+    const averageConfidence = confidenceValues.length
+      ? confidenceValues.reduce((sum, value) => sum + value, 0) /
+        confidenceValues.length
+      : null;
+    if (averageConfidence != null && averageConfidence < 0.7)
+      await notifySafely("OCR_LOW_CONFIDENCE", shop, {
+        invoiceId: invoice.id,
+        invoiceNumber: invoice.invoiceNumber,
+        supplier: invoice.vendor?.name,
+        message: `OCR confidence was ${Math.round(averageConfidence * 100)}%; manual review is recommended`,
+      });
+    if (reconciliationResult?.discrepancies.length)
+      await notifySafely("PO_MISMATCH", shop, {
+        invoiceId: invoice.id,
+        invoiceNumber: invoice.invoiceNumber,
+        supplier: invoice.vendor?.name,
+        amount: invoice.total,
+        currency: invoice.currency,
+        message: reconciliationResult.discrepancies.join(" "),
+      });
+    if (vendorName === "Unknown Vendor")
+      await notifySafely("MISSING_SUPPLIER", shop, {
+        invoiceId: invoice.id,
+        invoiceNumber: invoice.invoiceNumber,
+        message: "Assign a supplier before approval and cost sync",
+      });
     return {
       invoice,
+      creditNote: null,
       parsed,
       reconciliationResult,
       syncResult: null,
@@ -257,6 +347,122 @@ export async function persistCapturedInvoice(input: Capture) {
     throw error;
   }
 }
+// Credit documents are stored beside invoices and matched to the invoice they
+// credit. They never carry line-level Shopify mapping of their own.
+async function persistCapturedCreditNote(input: Capture & {
+  shop: string;
+  vendorName: string;
+  documentHash: string;
+  parsed: ReturnType<typeof parseInvoiceText>;
+}) {
+  const { shop, parsed } = input;
+  const duplicate = await prisma.creditNote.findFirst({
+    where: { shop, documentHash: input.documentHash },
+  });
+  if (duplicate)
+    throw new Error(
+      `Duplicate credit note: ${duplicate.creditNoteNumber || duplicate.id.slice(0, 8)} was already captured.`,
+    );
+  const amount = roundMoney(Math.abs(Number(parsed.total) || 0));
+  if (!(amount > 0))
+    throw new Error(
+      "The credit note amount could not be read. Enter it in the credit note form.",
+    );
+  const created = await prisma.$transaction(async (tx) => {
+    if (input.jobLease) {
+      const active = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "InvoiceJob"
+        WHERE "id" = ${input.jobLease.id} AND "shop" = ${shop}
+        AND "leaseToken" = ${input.jobLease.token} AND "status" = 'PROCESSING' FOR UPDATE`;
+      if (!active.length)
+        throw new Error("Processing was cancelled or the lease was lost.");
+    }
+    const vendor = await tx.vendor.upsert({
+      where: { shop_name: { shop, name: input.vendorName } },
+      update: {},
+      create: { shop, name: input.vendorName, defaultCurrency: parsed.currency },
+    });
+    const matched = await findInvoiceForCredit(
+      shop,
+      parsed.originalInvoiceNumber,
+      vendor.id,
+    );
+    if (matched) await invalidateInvoiceForCredit(tx, shop, matched.id);
+    const credit = await tx.creditNote.create({
+      data: {
+        shop,
+        vendorId: vendor.id,
+        invoiceId: matched?.id || null,
+        creditNoteNumber:
+          parsed.creditNoteNumber?.trim() || parsed.invoiceNumber?.trim() || null,
+        originalInvoiceNumber: parsed.originalInvoiceNumber?.trim() || null,
+        amount,
+        currency: parsed.currency,
+        reason: detectCreditReason({
+          rawText: input.rawText,
+          items: parsed.items,
+        }),
+        status: matched ? "MATCHED" : "PENDING",
+        dateIssued: new Date(parsed.date),
+        documentHash: input.documentHash,
+        storageKey: input.storageKey || null,
+        sourceFilename: input.filename || null,
+        rawText: input.rawText,
+        allocation: { method: "PRO_RATA" },
+        actor: input.actor || "capture",
+        lines: parsed.items.length
+          ? {
+              create: parsed.items.map((item) => ({
+                description: item.name,
+                quantity: Math.abs(item.quantity),
+                unitPrice: Math.abs(item.price),
+                lineAmount: Math.abs(item.amount),
+                originalLineId: item.sku || null,
+              })),
+            }
+          : undefined,
+        allocations: matched
+          ? {
+              create: {
+                targetInvoiceId: matched.id,
+                allocatedAmount: amount,
+                allocationReason: "Matched by parsed original invoice number",
+              },
+            }
+          : undefined,
+      },
+    });
+    await tx.auditEvent.create({
+      data: {
+        shop,
+        invoiceId: matched?.id || null,
+        actor: input.actor || "capture",
+        action: "CREDIT_NOTE_CAPTURED",
+        detail: {
+          creditNoteId: credit.id,
+          creditNoteNumber: credit.creditNoteNumber,
+          amount,
+          currency: credit.currency,
+          matchedInvoiceId: matched?.id || null,
+        },
+      },
+    });
+    return credit;
+  });
+  return {
+    invoice: null,
+    creditNote: created,
+    parsed,
+    reconciliationResult: null,
+    syncResult: null,
+    warnings: [
+      ...(parsed.warnings || []),
+      created.invoiceId
+        ? `Matched to invoice ${created.originalInvoiceNumber}. Review and approve the credit before syncing costs.`
+        : "No invoice with that number was found. Match this credit note to the invoice it credits.",
+    ],
+  };
+}
+
 export async function createInvoiceFromInput(input: {
   request: Request;
   shop: string;

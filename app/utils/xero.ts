@@ -107,6 +107,56 @@ export async function findXeroBills(
     ).Invoices || []
   );
 }
+// A supplier credit is a separate Xero document: an ACCPAY credit note that
+// Xero can allocate against the original bill.
+export async function createXeroCreditNote(
+  connection: XeroConnection,
+  payload: any,
+  requestKey: string,
+) {
+  return xeroRequest(connection, "/CreditNotes?summarizeErrors=false", {
+    method: "POST",
+    headers: { "Idempotency-Key": requestKey },
+    body: JSON.stringify({ CreditNotes: [payload] }),
+  });
+}
+
+export async function allocateXeroCreditNote(
+  connection: XeroConnection,
+  creditNoteId: string,
+  invoiceId: string,
+  amount: number,
+  date: string,
+  requestKey: string,
+) {
+  return xeroRequest(
+    connection,
+    `/CreditNotes/${encodeURIComponent(creditNoteId)}/Allocations`,
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": requestKey },
+      body: JSON.stringify({
+        Allocations: [
+          { Invoice: { InvoiceID: invoiceId }, Amount: amount, Date: date },
+        ],
+      }),
+    },
+  );
+}
+export async function findXeroCreditNotes(
+  connection: XeroConnection,
+  number: string,
+) {
+  const where = `CreditNoteNumber==${JSON.stringify(number)}`;
+  return (
+    (
+      await xeroRequest(
+        connection,
+        `/CreditNotes?where=${encodeURIComponent(where)}&page=1&pageSize=100`,
+      )
+    ).CreditNotes || []
+  );
+}
 export async function getOrCreateXeroContact(
   connection: XeroConnection,
   name: string,

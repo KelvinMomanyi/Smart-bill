@@ -33,6 +33,7 @@ export async function action({ request }: ActionFunctionArgs) {
         jobId: job.id,
         status: job.status,
         invoiceId: job.invoiceId,
+        creditNoteId: job.creditNoteId,
       },
       { status: 202 },
     );

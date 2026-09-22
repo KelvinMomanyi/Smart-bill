@@ -1,0 +1,3 @@
+BEGIN;
+ALTER TABLE "InvoiceJob" ADD COLUMN "creditNoteId" TEXT;
+COMMIT;

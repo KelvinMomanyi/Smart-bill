@@ -28,11 +28,25 @@ Financial activity locks invoice editing. Use a separate correcting document if 
 
 Reports keep each currency separate. Weekly time-saving estimates use the measured minutes entered in Settings; zero is the default. These are operational estimates, not guaranteed savings or profit.
 
+## Freight, duty and landed cost
+
+Capture tags freight, shipping, delivery, customs duty, handling and insurance lines as charges instead of products. A charge line is never matched to a Shopify variant and is never synced as a product cost; it is spread across the invoice product lines so the cost written to Shopify is the landed cost rather than the bare invoice rate.
+
+- Choose the method in the invoice **Freight, duty and landed cost** section: by line value (default), by quantity, by product weight, or manual amounts per line. `Do not allocate` leaves the charges unallocated and blocks approval, cost preview and cost sync.
+- Weight allocation uses the Shopify inventory-item weight of each mapped variant. If a line has no weight, SmartBill allocates by line value and states that in the warnings instead of failing.
+- The preview shows the allocated charge and the landed cost per unit for every product line. Landed cost per unit is `(net line amount + allocated charge) / quantity`, which is exactly what is written to the Shopify variant cost.
+- Rounding always reconciles to the charge total; the largest line absorbs the remainder, so allocated amounts never drift.
+- Manual amounts must total the charge lines, or the invoice cannot be saved or approved.
+- Saving corrections resets approval, so the landed cost is always previewed against approved figures.
+- Charge lines remain their own lines on the accounting bill (CSV, Xero, QuickBooks). SmartBill does not post the allocation to accounting; it changes the Shopify cost only.
+- Freight allocated to product lines that are not selected for cost sync is reported as a warning in the cost review because that share is not written to Shopify.
+- Invoices captured before this change keep their existing lines as products until a merchant retags them, so no historical invoice is altered automatically.
+
 ## Local setup and checks
 
 Use Node.js 22 or 24, PostgreSQL, a Shopify development store and the environment variables in `.env.example`. Supply actual values through your environment or a private `.env` file. Supabase project credentials are required for file uploads; pasted text works without file storage. Set `SUPABASE_URL` to the project API URL (`https://PROJECT_REF.supabase.co`), set `SUPABASE_SECRET_KEY` to the server-only `sb_secret_` key from the same project (or use the legacy `SUPABASE_SERVICE_ROLE_KEY`), and set `SUPABASE_STORAGE_BUCKET`. Do not use a dashboard, Storage or S3 URL, and do not use the publishable/anon key. The first storage operation creates the bucket when needed and enforces private access, the 10 MB limit and SmartBill's accepted document MIME types. Never expose the secret key to browser code.
 
-Dashboard capture and Retry/Continue processing build on the working OCR flow from `../old/app/components/InvoiceUpload.tsx`. SmartBill now uses Tesseract.js 6.0.1 in the browser, reuses one English worker for every page, enables auto-rotation, preserves word spacing and renders PDFs with PDF.js 3.11.174 at 2x scale. Images are resized to a useful bounded resolution and a grayscale contrast pass improves small decimal points and currency glyphs. Weak first readings receive one alternate sparse-layout pass; SmartBill scores both complete readings and keeps the stronger one. Each PDF page is recognized in order, with page markers, progress, an image preview, raw text and recognition confidence. PDFs over the five-page limit are rejected explicitly rather than silently truncated.
+Dashboard capture and Retry/Continue processing use Tesseract.js 6.0.1 in the browser, reuse one English worker for every page, enable auto-rotation, preserve word spacing and render PDFs with PDF.js at 2x scale. Images are resized to a bounded resolution and a grayscale contrast pass improves small decimal points and currency glyphs. Weak first readings receive one alternate sparse-layout pass; SmartBill scores both complete readings and keeps the stronger one. Each PDF page is recognized in order, with page markers, progress, an image preview, raw text and recognition confidence. PDFs over the ten-page limit are rejected explicitly rather than silently truncated.
 
 The parser accepts common currency symbols and codes, decimal points or decimal commas, and common thousands separators. It makes conservative repairs for OCR errors in monetary context, such as `S55.89`, `$SS.89`, `§55,89`, `U5D`, `TotaI` and `SubtotaI`, without applying digit substitutions to supplier names or invoice identifiers. Line items can be reconstructed from ordinary rows, rows with units or tax/code columns, wrapped descriptions and values, amount-only tables, quantity-plus-amount tables, and OCR output arranged as whole columns. Missing line amounts or rates are derived only when the detected table headers establish which value is present. Supported currency detection includes USD, EUR, GBP, CAD, AUD, NZD, KES, ZAR, NGN, GHS, JPY, CNY, INR, AED, UGX, TZS, RWF, BRL and PHP. Users must still confirm the original document, currency, tax and every amount before approval.
 
@@ -114,7 +128,9 @@ For unattended email/API OCR, run a separate persistent Node service with `npm r
 
 Alternatively, a scheduler can call `/api/jobs/run` with `Authorization: Bearer <CRON_SECRET>` to process one queued document per call. Configure the schedule and execution time explicitly. The repository does not activate a scheduler. Stale worker leases recover after two minutes. OCR configuration errors and timeouts fail visibly and can be retried after correction; other transient failures are retried up to three times.
 
-Browser OCR supports up to five pages per document, matching the original processor. Server email/API OCR supports up to ten pages. File and batch limits are 10 MB per document and 25 MB per batch. Vercel-hosted browser uploads are capped at 4 MB per batch because Vercel Functions have a 4.5 MB request/response payload limit. Larger documents and full-size inbound email payloads need the Node service behind an ingress that supports these sizes. See [Vercel function limits](https://vercel.com/docs/functions/limitations). Test original-document viewing and OCR on the actual host.
+Call `/api/maintenance/run` once daily with the same bearer secret to escalate overdue approvals, send configured daily notification digests and refresh the current monthly reporting snapshot. Immediate Slack notifications use a workspace incoming webhook. Email notifications use SendGrid and require `SENDGRID_API_KEY` plus `NOTIFICATION_FROM_EMAIL`. Historical FX lookup through Open Exchange Rates requires `OPENEXCHANGERATES_APP_ID`; reviewed manual rates remain available without it.
+
+Browser and server OCR support up to ten pages per document. File and batch limits are 10 MB per document and 25 MB per batch. Vercel-hosted browser uploads are capped at 4 MB per batch because Vercel Functions have a 4.5 MB request/response payload limit. Larger documents and full-size inbound email payloads need the Node service behind an ingress that supports these sizes. Test original-document viewing and OCR on the actual host.
 
 The installed Shopify SDK supports `2025-10`, now selected for Admin API calls and webhooks. Upgrade the SDK and retest before that API version retires on October 16, 2026; see [Shopify's version schedule](https://shopify.dev/docs/api/usage/versioning). Current scopes are limited to product reads and inventory cost access.
 
@@ -128,6 +144,12 @@ Register these callback URLs with your accounting OAuth applications:
 Set the Xero/QuickBooks credentials in the environment, connect from Settings and explicitly confirm the company. Select accounts and purchase taxes from provider-backed choices. Invoice Accounting details supports mixed line taxes and reviewed foreign exchange rates. QuickBooks supports international purchase-tax bills and an explicitly selected expense account for US non-recoverable purchase sales tax. Xero creates draft purchase bills; QuickBooks creates unpaid bills. Both support original-document attachments, provider-side disconnect, confirmed-rejection retries and verification of uncertain outcomes. See [Accounting integrations](ACCOUNTING_INTEGRATIONS.md) for configuration, supported scope and live acceptance steps.
 
 For Growth email capture, configure a Postmark-compatible inbound webhook to `/api/inbound-email` using HTTP Basic username `smartbill` and password `INBOUND_EMAIL_SECRET`. Set `INBOUND_EMAIL_DOMAIN` to the receiving domain and route mail for generated aliases to that webhook. Enable the store's inbox from Settings. Only authenticated webhook requests for a single known store are accepted; document hashes deduplicate provider retries. Inbound email is not active until the mail provider and receiving domain are configured.
+
+## Supported operating boundary
+
+SmartBill is designed for product-based Shopify merchants processing roughly 250 or fewer supplier documents per month. It supports freight/duty allocation, supplier credit notes, reviewed foreign-currency conversion, pack-size conversion, multi-step approvals, Xero/QuickBooks supplier bills and credits, notifications, and vendor/price reporting. Every financial write remains approval-gated and auditable.
+
+The store still has one Shopify base currency. FX revaluation is calculated and recorded for review but is not automatically posted as a gain/loss journal. Browser and server OCR stop at ten pages, Vercel request-size limits still apply, and freight weight allocation falls back to value when Shopify product weights are incomplete. NetSuite, Sage, Wave, native Shopify PO/Transfer import, mobile photo capture and historical CSV migration are not included in this release; do not advertise those workflows as available.
 
 ## Before publication
 

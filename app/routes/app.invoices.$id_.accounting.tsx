@@ -202,7 +202,9 @@ export default function InvoiceAccountingDetails() {
                       min="0.000001"
                       step="any"
                       required
-                      defaultValue={matching?.exchangeRate || ""}
+                      defaultValue={
+                        matching?.exchangeRate || invoice.fxRate || ""
+                      }
                       disabled={locked || busy}
                     />{" "}
                     {catalog.homeCurrency}

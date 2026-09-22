@@ -1,7 +1,6 @@
 import { MAX_FILE_BYTES } from "./plans";
 
-// Match the working processor in old/app/components/InvoiceUpload.tsx.
-export const BROWSER_OCR_MAX_PAGES = 5;
+export const BROWSER_OCR_MAX_PAGES = 10;
 export const BROWSER_PDF_SCALE = 2;
 export const BROWSER_OCR_MIN_WIDTH = 1800;
 export const BROWSER_OCR_MAX_EDGE = 3600;
@@ -277,7 +276,9 @@ export function validateBrowserOcrText(rawText: unknown, pageCount: unknown) {
     Number(pageCount) < 1 ||
     Number(pageCount) > BROWSER_OCR_MAX_PAGES
   )
-    throw new Error("Browser OCR supports complete invoices of up to 5 pages.");
+    throw new Error(
+      `Browser OCR supports complete invoices of up to ${BROWSER_OCR_MAX_PAGES} pages.`,
+    );
   return { rawText, pageCount: Number(pageCount) };
 }
 
@@ -303,11 +304,11 @@ export async function processInvoiceInBrowser(
     const pdf = await loading?.promise;
     const pageCount = pdf?.numPages || 1;
     activePageCount = pageCount;
-    // The original limited processing to five pages. Reject larger documents
-    // explicitly so totals on later pages cannot silently disappear.
+    // Reject larger documents explicitly so later-page totals cannot silently
+    // disappear from an otherwise successful capture.
     if (pageCount > BROWSER_OCR_MAX_PAGES)
       throw new Error(
-        "This PDF exceeds the 5-page browser OCR limit. Split it into complete invoices before processing.",
+        `This PDF exceeds the ${BROWSER_OCR_MAX_PAGES}-page browser OCR limit. Split it into complete invoices before processing.`,
       );
     worker = await engine.createWorker("eng", {
       logger(message) {

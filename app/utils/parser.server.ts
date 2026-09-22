@@ -1,3 +1,15 @@
+import {
+  detectChargeCategory,
+  lineValue,
+  type ChargeCategory,
+} from "./landedCost";
+import {
+  detectPackSize,
+  detectSupplierUnit,
+  normalizeSupplierUnit,
+} from "./unitCost";
+import { creditNoteSignals } from "./creditNotes";
+
 type ParsedAddress = {
   name: string;
   address?: string;
@@ -10,6 +22,12 @@ export type ParsedInvoiceItem = {
   sku?: string;
   name: string;
   description: string;
+  // Goods are PRODUCT; freight, duty, handling and insurance lines are charges
+  // that must be allocated into the landed cost instead of matched to variants.
+  category?: ChargeCategory;
+  // The unit the supplier billed in, when the line states one, e.g. "boxes".
+  supplierUoM?: string;
+  packSize?: number;
   quantity: number;
   rate: number;
   price: number;
@@ -26,6 +44,10 @@ type ParsedInvoiceItemWithSource = ParsedInvoiceItem & {
 
 export type ParsedInvoice = {
   invoiceNumber?: string;
+  // Set when the document presents itself as a supplier credit document.
+  isCreditDocument?: boolean;
+  creditNoteNumber?: string;
+  originalInvoiceNumber?: string;
   poNumber?: string;
   date: string;
   dueDate?: string;
@@ -436,7 +458,7 @@ const emptyItemHints = (): ItemColumnHints => ({
 });
 const quantityPattern = "\\d+(?:[.,]\\d+)?";
 const itemUnitToken =
-  "(?:x|ea(?:ch)?|pcs?|pieces?|units?|unit|nos?|sets?|cases?|dozen|kg|g|lb|lbs|hours?|hrs?|days?|boxes?|packs?|litres?|liters?|ltr|metres?|meters?)";
+  "(?:x|ea(?:ch)?|pcs?|pieces?|units?|unit|nos?|sets?|cases?|cartons?|pallets?|containers?|dozens?|gross|reams?|rolls?|kg|g|lb|lbs|hours?|hrs?|days?|boxes?|packs?|gallons?|litres?|liters?|ltr|metres?|meters?)";
 const itemUnitPattern =
   `(?:${itemUnitToken}\\.?\\s+)?`;
 
@@ -606,6 +628,23 @@ function parseItemLine(
     ),
     (_match, unit: string, quantity: string) => `${quantity} ${unit}`,
   );
+  const billedUnit = normalizedRow.match(
+    new RegExp(
+      `\\b${quantityPattern}\\s+(${itemUnitToken})\\.?\\s+(?=${currencyPattern}\\s*[+-]?\\d)`,
+      "i",
+    ),
+  )?.[1];
+  const withUnit = (item: ParsedInvoiceItemWithSource | null) => {
+    if (!item) return null;
+    const supplierUoM = billedUnit
+      ? normalizeSupplierUnit(billedUnit)
+      : detectSupplierUnit(item.name) || undefined;
+    return {
+      ...item,
+      supplierUoM,
+      packSize: detectPackSize(item.name, supplierUoM) || undefined,
+    };
+  };
 
   const completeRow = normalizedRow.match(
     new RegExp(
@@ -614,12 +653,12 @@ function parseItemLine(
     ),
   );
   if (completeRow)
-    return buildParsedItem(
+    return withUnit(buildParsedItem(
       completeRow[1],
       completeRow[2],
       completeRow[3],
       completeRow[4],
-    );
+    ));
 
   // Tax, discount or accounting-code columns can sit between rate and amount.
   const rowWithExtraColumns = normalizedRow.match(
@@ -629,12 +668,12 @@ function parseItemLine(
     ),
   );
   if (rowWithExtraColumns)
-    return buildParsedItem(
+    return withUnit(buildParsedItem(
       rowWithExtraColumns[1],
       rowWithExtraColumns[2],
       rowWithExtraColumns[3],
       rowWithExtraColumns[4],
-    );
+    ));
 
   // Some suppliers put tax or discount codes after the extended amount.
   const trailingCode =
@@ -646,12 +685,12 @@ function parseItemLine(
     ),
   );
   if (rowWithTrailingColumns)
-    return buildParsedItem(
+    return withUnit(buildParsedItem(
       rowWithTrailingColumns[1],
       rowWithTrailingColumns[2],
       rowWithTrailingColumns[3],
       rowWithTrailingColumns[4],
-    );
+    ));
 
   if (!relaxed) return null;
 
@@ -662,29 +701,29 @@ function parseItemLine(
     ),
   );
   if (quantityAndAmount && hints.quantity && hints.amount && !hints.rate)
-    return buildParsedItem(
+    return withUnit(buildParsedItem(
       quantityAndAmount[1],
       quantityAndAmount[2],
       undefined,
       quantityAndAmount[3],
-    );
+    ));
   if (quantityAndAmount && hints.quantity && hints.rate && !hints.amount)
-    return buildParsedItem(
+    return withUnit(buildParsedItem(
       quantityAndAmount[1],
       quantityAndAmount[2],
       quantityAndAmount[3],
-    );
+    ));
 
   const rateAndAmount = normalizedRow.match(
     new RegExp(`^(.+)\\s+${moneyPattern}\\s+${moneyPattern}$`, "i"),
   );
   if (rateAndAmount && !hints.quantity)
-    return buildParsedItem(
+    return withUnit(buildParsedItem(
       rateAndAmount[1],
       "1",
       rateAndAmount[2],
       rateAndAmount[3],
-    );
+    ));
 
   const amountOnly = normalizedRow.match(
     new RegExp(`^(.+)\\s+${moneyPattern}$`, "i"),
@@ -875,6 +914,15 @@ function extractItems(lines: string[]) {
   }
 
   return items;
+}
+
+// Credit note fields use the same "label then value" shape as invoices, but
+// the labels differ enough that they need their own pass.
+function findCreditField(lines: string[], patterns: RegExp[]) {
+  const candidate = findValue(lines, patterns);
+  if (!candidate || /^(date|due|total|tax|amount|number|no)$/i.test(candidate))
+    return undefined;
+  return candidate;
 }
 
 function findInvoiceNumber(lines: string[]) {
@@ -1221,13 +1269,52 @@ export function parseInvoiceText(text: string, dateOrder: "DMY" | "MDY" = "DMY")
     warnings.push(
       "Invoice currency was not found. SmartBill assumed USD; confirm the currency before approval.",
     );
+  const detectedCharges = repairedItems.items
+    .filter((item) => detectChargeCategory(item.name, item.sku))
+    .reduce((total, item) => total + lineValue(item), 0);
+  if (detectedCharges > 0)
+    warnings.push(
+      `Detected ${detectedCharges.toFixed(2)} in freight, duty or handling charges. Choose how to allocate them into the landed cost before syncing product costs.`,
+    );
   if (decimalCorrected)
     warnings.push(
       "OCR omitted a decimal separator in one or more amounts. SmartBill restored it using the invoice arithmetic; confirm the corrected values before approval.",
     );
 
+  const creditNoteNumber = findCreditField(lines, [
+    /\bcredit\s*note\s*(?:number|no\.?|#)\s*:?\s*([A-Z0-9][A-Z0-9._/-]*)/i,
+    /\bcredit\s*memo\s*(?:number|no\.?|#)\s*:?\s*([A-Z0-9][A-Z0-9._/-]*)/i,
+    /\b(?:document|reference)\s*(?:number|no\.?|#)\s*:?\s*((?:CN|CR|CM|CRN)[\s._-]*\d[A-Z0-9._/-]*)/i,
+    /\b((?:CN|CR|CM|CRN)[\s._-]*\d[A-Z0-9._/-]*)\b/,
+  ]);
+  const originalInvoiceNumber = findCreditField(lines, [
+    /\b(?:original\s+|against\s+)?invoice\s*(?:number|no\.?|#)\s*:?\s*([A-Z0-9][A-Z0-9._/-]*)/i,
+    /\breference\s*:?\s*(?:invoice\s*)?([A-Z0-9][A-Z0-9._/-]*)/i,
+  ]);
+  const documentNumber = creditNoteNumber || findInvoiceNumber(lines);
+  const isCreditDocument = creditNoteSignals({
+    rawText: normalizedText,
+    invoiceNumber: documentNumber,
+    total: summary.total,
+    items: repairedItems.items.map((item) => ({
+      name: item.name,
+      quantity: item.quantity,
+      price: item.price,
+      amount: item.amount,
+    })),
+  }).detected;
+  if (isCreditDocument)
+    warnings.push(
+      creditNoteNumber
+        ? `This looks like credit note ${creditNoteNumber}. Review it against the invoice it credits before it reduces any cost.`
+        : "This looks like a supplier credit note. Match it to the invoice it credits before it reduces any cost.",
+    );
+
   return {
-    invoiceNumber: findInvoiceNumber(lines),
+    invoiceNumber: documentNumber,
+    isCreditDocument,
+    creditNoteNumber,
+    originalInvoiceNumber,
     date: date || new Date().toISOString().slice(0, 10),
     dueDate,
     paymentTerms: extractPaymentTerms(lines),
@@ -1237,7 +1324,19 @@ export function parseInvoiceText(text: string, dateOrder: "DMY" | "MDY" = "DMY")
     subtotal,
     tax,
     total,
-    items: repairedItems.items.map(withoutItemSource),
+    items: repairedItems.items.map((item) => {
+      const category = detectChargeCategory(item.name, item.sku);
+      return {
+        ...withoutItemSource(item),
+        category,
+        // Charge lines are allocated into the landed cost, so their unit is
+        // never converted into stock units.
+        supplierUoM: category
+          ? undefined
+          : item.supplierUoM || detectSupplierUnit(item.name) || undefined,
+        packSize: category ? undefined : item.packSize,
+      };
+    }),
     warnings,
   };
 }

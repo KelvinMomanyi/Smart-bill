@@ -87,6 +87,15 @@ function mockJob(t: TestContext, status = "AWAITING_OCR") {
   );
   replaceMethod(t, prisma.shopSettings, "findUnique", async () => null);
   replaceMethod(t, prisma.supplierMapping, "findMany", async () => []);
+  replaceMethod(t, prisma.vendor, "findFirst", async () => null);
+  replaceMethod(t, prisma.uoMMapping, "findMany", async () => []);
+  replaceMethod(t, prisma.creditNote, "findFirst", async () => null);
+  replaceMethod(t, prisma.notificationPreference, "findMany", async () => []);
+  replaceMethod(t, prisma.freightLine, "deleteMany", async () => ({ count: 0 }));
+  replaceMethod(t, prisma.freightLine, "createMany", async ({ data }: any) => ({
+    count: data.length,
+  }));
+  replaceMethod(t, prisma.freightLine, "findMany", async () => []);
   replaceMethod(t, prisma, "$transaction", async (callback: any) =>
     callback(prisma),
   );
@@ -97,7 +106,13 @@ function mockJob(t: TestContext, status = "AWAITING_OCR") {
   replaceMethod(t, prisma.invoice, "create", async ({ data }: any) => {
     const invoice = { ...data, id: "invoice-" + (invoices.length + 1) };
     invoices.push(invoice);
-    return invoice;
+    return {
+      ...invoice,
+      items: data.items.create.map((item: any, index: number) => ({
+        ...item,
+        id: `item-${index + 1}`,
+      })),
+    };
   });
   replaceMethod(t, prisma.auditEvent, "create", async () => ({}));
   replaceMethod(t, prisma.monthlyUsage, "upsert", async () => {
@@ -108,8 +123,12 @@ function mockJob(t: TestContext, status = "AWAITING_OCR") {
 
 test("browser completion saves the original, parsed fields and review state once", async (t) => {
   const { job, invoices } = mockJob(t);
-  const id = await completeBrowserInvoiceJob(input);
-  assert.equal(await completeBrowserInvoiceJob(input), id);
+  const id = (await completeBrowserInvoiceJob(input)).invoiceId;
+  assert.equal(id, "invoice-1");
+  assert.equal(
+    (await completeBrowserInvoiceJob(input)).invoiceId,
+    id,
+  );
   assert.equal(invoices.length, 1);
   assert.equal(invoices[0].total, 58);
   assert.equal(invoices[0].invoiceNumber, "BROWSER-100");
@@ -140,12 +159,16 @@ Total USD $55.89`,
     {
       sku: "WGT-3000",
       name: "Widget 3000",
+      category: "PRODUCT",
+      supplierUoM: "each",
+      packSize: null,
       price: 27.945,
       quantity: 2,
       amount: 55.89,
       shopifyVariantId: undefined,
       matchedProductTitle: undefined,
       matchConfirmed: false,
+      syncCost: true,
     },
   ]);
 });
@@ -155,7 +178,10 @@ test("browser OCR retries failed jobs and reconciles interrupted saves without d
   await completeBrowserInvoiceJob(input);
   job.status = "FAILED";
   job.invoiceId = null;
-  assert.equal(await completeBrowserInvoiceJob(input), invoices[0].id);
+  assert.equal(
+    (await completeBrowserInvoiceJob(input)).invoiceId,
+    invoices[0].id,
+  );
   assert.equal(invoices.length, 1);
 });
 

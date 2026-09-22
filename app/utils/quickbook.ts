@@ -157,6 +157,27 @@ export function readQuickBooksBill(
     `/bill/${encodeURIComponent(id)}`,
   );
 }
+export function createQuickBooksVendorCredit(
+  connection: QuickBooksConnection,
+  payload: Record<string, unknown>,
+  requestKey?: string,
+) {
+  return quickBooksRequest(
+    connection,
+    `/vendorcredit${requestKey ? `?requestid=${encodeURIComponent(requestKey)}` : ""}`,
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+export function findQuickBooksVendorCredits(
+  connection: QuickBooksConnection,
+  number: string,
+) {
+  return quickBooksQuery<any>(
+    connection,
+    `select * from VendorCredit where DocNumber = '${escapeQuickBooksQueryValue(number)}' maxresults 1000`,
+    "VendorCredit",
+  );
+}
 export function findQuickBooksBills(
   connection: QuickBooksConnection,
   number: string,

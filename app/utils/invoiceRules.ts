@@ -1,3 +1,5 @@
+import { isChargeLine } from "./landedCost";
+
 export function normalizedKey(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
@@ -16,7 +18,7 @@ export function validDate(value: string) {
 type InvoiceAmounts = {
   invoiceNumber?: string | null; currency: string; total: number;
   subtotal?: number | null; tax?: number | null;
-  items: { name: string; quantity: number; price: number; amount?: number | null }[];
+  items: { name: string; quantity: number; price: number; amount?: number | null; category?: string | null }[];
 };
 export function invoiceIssues(invoice: InvoiceAmounts) {
   const issues: string[] = [];
@@ -32,13 +34,14 @@ export function invoiceIssues(invoice: InvoiceAmounts) {
       issues.push(`Line ${index + 1} amount must equal quantity × unit price. Enter a net unit price after discounts.`);
     }
   }
-  const sum = roundMoney(invoice.items.reduce((total, item) => total + roundMoney(item.quantity * item.price), 0));
-  if (invoice.subtotal != null && (!Number.isFinite(invoice.subtotal) || Math.abs(sum - invoice.subtotal) > 0.011)) {
-    issues.push("Line amounts do not match the subtotal. Add freight or other charges as separate lines.");
+  const goods = roundMoney(invoice.items.filter((item) => !isChargeLine(item)).reduce((total, item) => total + roundMoney(item.quantity * item.price), 0));
+  const charges = roundMoney(invoice.items.filter((item) => isChargeLine(item)).reduce((total, item) => total + roundMoney(item.quantity * item.price), 0));
+  if (invoice.subtotal != null && (!Number.isFinite(invoice.subtotal) || Math.abs(goods - invoice.subtotal) > 0.011)) {
+    issues.push("Product line amounts do not match the subtotal. Freight and charges are excluded from the subtotal.");
   }
   if (!Number.isFinite(invoice.tax ?? 0) || (invoice.tax ?? 0) < 0 ||
-      Math.abs(roundMoney(sum + (invoice.tax ?? 0)) - invoice.total) > 0.011) {
-    issues.push("Net line amounts plus tax must match the invoice total.");
+      Math.abs(roundMoney(goods + charges + (invoice.tax ?? 0)) - invoice.total) > 0.011) {
+    issues.push("Net product and charge amounts plus tax must match the invoice total.");
   }
   return issues;
 }

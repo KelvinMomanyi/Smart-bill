@@ -95,7 +95,8 @@ export async function completeBrowserInvoiceJob(input: {
     where: { id: input.jobId, shop: input.shop },
   });
   if (!job) throw new Error("Document not found in this store.");
-  if (job.status === "COMPLETED" && job.invoiceId) return job.invoiceId;
+  if (job.status === "COMPLETED" && (job.invoiceId || job.creditNoteId))
+    return { invoiceId: job.invoiceId, creditNoteId: job.creditNoteId };
   if (job.contentType !== "application/pdf" && pageCount !== 1)
     throw new Error("An image must have exactly one OCR page.");
   const leaseToken = randomUUID();
@@ -127,26 +128,35 @@ export async function completeBrowserInvoiceJob(input: {
     const existing = await prisma.invoice.findFirst({
       where: { shop: input.shop, documentHash: job.documentHash },
     });
-    const invoiceId =
-      existing?.id ||
-      (
-        await persistCapturedInvoice({
-          shop: input.shop,
-          rawText,
-          storageKey: job.storageKey,
-          filename: job.filename,
-          documentHash: job.documentHash,
-          vendorName: job.vendorName,
-          purchaseOrderId: job.purchaseOrderId,
-          actor: input.actor,
-          jobLease: { id: job.id, token: leaseToken },
-        })
-      ).invoice.id;
+    let invoiceId = existing?.id ?? null;
+    let creditNoteId = invoiceId
+      ? null
+      : ((
+          await prisma.creditNote.findFirst({
+            where: { shop: input.shop, documentHash: job.documentHash },
+          })
+        )?.id ?? null);
+    if (!invoiceId && !creditNoteId) {
+      const captured = await persistCapturedInvoice({
+        shop: input.shop,
+        rawText,
+        storageKey: job.storageKey,
+        filename: job.filename,
+        documentHash: job.documentHash,
+        vendorName: job.vendorName,
+        purchaseOrderId: job.purchaseOrderId,
+        actor: input.actor,
+        jobLease: { id: job.id, token: leaseToken },
+      });
+      invoiceId = captured.invoice?.id ?? null;
+      creditNoteId = captured.creditNote?.id ?? null;
+    }
     const completed = await prisma.invoiceJob.updateMany({
       where: { id: job.id, shop: input.shop, leaseToken },
       data: {
         status: "COMPLETED",
         invoiceId,
+        creditNoteId,
         pageCount,
         error: null,
         leaseToken: null,
@@ -155,9 +165,9 @@ export async function completeBrowserInvoiceJob(input: {
     });
     if (!completed.count)
       throw new Error(
-        "Saving was interrupted. Reload to check the invoice before retrying.",
+        "Saving was interrupted. Reload to check the document before retrying.",
       );
-    return invoiceId;
+    return { invoiceId, creditNoteId };
   } catch (error) {
     await prisma.invoiceJob.updateMany({
       where: { id: job.id, shop: input.shop, leaseToken },
@@ -212,7 +222,15 @@ export async function processNextInvoiceJob(shop?: string) {
       where: { shop: job.shop, documentHash: job.documentHash },
     });
     let invoiceId = existing?.id;
-    if (!invoiceId) {
+    let creditNoteId =
+      invoiceId
+        ? undefined
+        : (
+            await prisma.creditNote.findFirst({
+              where: { shop: job.shop, documentHash: job.documentHash },
+            })
+          )?.id;
+    if (!invoiceId && !creditNoteId) {
       const document = await readInvoiceDocument(job.storageKey);
       const { extractTextFromDocument } = await import("../utils/ocr.server");
       const result = await extractTextFromDocument(document.buffer, {
@@ -240,13 +258,15 @@ export async function processNextInvoiceJob(shop?: string) {
         actor: "document-worker",
         jobLease: { id: job.id, token: leaseToken },
       });
-      invoiceId = captured.invoice.id;
+      invoiceId = captured.invoice?.id;
+      creditNoteId = captured.creditNote?.id;
     }
     await prisma.invoiceJob.updateMany({
       where: { id: job.id, leaseToken },
       data: {
         status: "COMPLETED",
         invoiceId,
+        creditNoteId,
         lockedAt: null,
         leaseToken: null,
       },

@@ -7,6 +7,7 @@ import {
   normalizedKey,
 } from "../utils/invoiceRules";
 import { lockInvoice } from "./invoiceLock.server";
+import { notifySafely } from "./notifications.server";
 import {
   createQuickBooksBill,
   readQuickBooksBill,
@@ -328,6 +329,14 @@ export async function exportApprovedInvoice({
       String(remoteId),
       companyKey,
     );
+    await notifySafely("EXPORT_SUCCESS", shop, {
+      invoiceId,
+      invoiceNumber: invoice.invoiceNumber,
+      supplier: invoice.vendor?.name,
+      amount: invoice.total,
+      currency: invoice.currency,
+      message: `Exported successfully to ${platform}`,
+    });
     return {
       success: true,
       platform,
@@ -355,6 +364,15 @@ export async function exportApprovedInvoice({
         error:
           error instanceof Error ? error.message : "Verify the recorded bill.",
       },
+    });
+    await notifySafely("EXPORT_FAILURE", shop, {
+      invoiceId,
+      invoiceNumber: invoice.invoiceNumber,
+      supplier: invoice.vendor?.name,
+      amount: invoice.total,
+      currency: invoice.currency,
+      message:
+        error instanceof Error ? error.message : `${platform} export failed`,
     });
     throw error;
   }
@@ -454,7 +472,11 @@ export async function saveInvoiceAccountingMapping(
     })),
     ...(String(form.get("exchangeRate") || "").trim()
       ? { exchangeRate: Number(form.get("exchangeRate")) }
-      : {}),
+      : // Fall back to the rate reviewed on the invoice so the merchant only
+        // enters it once.
+        invoice.fxRate
+        ? { exchangeRate: invoice.fxRate }
+        : {}),
   };
   validateBillMapping(invoice, settings, catalog, mapping);
   await prisma.$transaction(async (tx) => {
