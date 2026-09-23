@@ -25,6 +25,7 @@ import {
   listQuickBooksEntity,
 } from "../utils/quickbook";
 import {
+  assertXeroAuthorizationConfigured,
   getXeroAuthUrl,
   createXeroBill,
   getXeroToken,
@@ -538,6 +539,35 @@ test("authorization URLs use current scopes and preserve the registered callback
   assert.equal(
     qb.searchParams.get("scope"),
     "com.intuit.quickbooks.accounting",
+  );
+});
+test("Xero configuration preflight explains provider-side authorization rejection", async (t) => {
+  fakeFetch(t, () =>
+    new Response(null, {
+      status: 302,
+      headers: {
+        Location: "https://login.xero.com/identity/error?errorId=test",
+      },
+    }),
+  );
+  await assert.rejects(
+    assertXeroAuthorizationConfigured(
+      "https://app.example/accounting/xero/callback",
+    ),
+    /Auth Code grant type.*https:\/\/app\.example\/accounting\/xero\/callback/,
+  );
+});
+test("Xero configuration preflight accepts the normal sign-in redirect", async (t) => {
+  fakeFetch(t, () =>
+    new Response(null, {
+      status: 302,
+      headers: { Location: "https://login.xero.com/identity/user/login" },
+    }),
+  );
+  await assert.doesNotReject(
+    assertXeroAuthorizationConfigured(
+      "https://app.example/accounting/xero/callback",
+    ),
   );
 });
 test("provider token exchange, refresh, connection listing and revocation use the documented endpoints", async (t) => {

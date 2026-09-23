@@ -30,7 +30,10 @@ import {
 } from "../services/billing.server";
 import { PLANS, planFromName, TRIAL_DAYS } from "../utils/plans";
 import { validCurrency } from "../utils/invoiceRules";
-import { createAuthorization } from "../services/accountingAuthorization.server";
+import {
+  accountingBaseUrl,
+  createAuthorization,
+} from "../services/accountingAuthorization.server";
 import {
   disconnectAccounting,
   livePlatform,
@@ -156,6 +159,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
             process.env.QB_SANDBOX_CLIENT_ID &&
             process.env.QB_SANDBOX_CLIENT_SECRET),
       ),
+    },
+    accountingCallbacks: {
+      XERO: `${accountingBaseUrl()}/accounting/xero/callback`,
+      QUICKBOOKS: `${accountingBaseUrl()}/accounting/quickbooks/callback`,
     },
     staff,
     vendors,
@@ -467,6 +474,7 @@ export default function Settings() {
     connections,
     catalogs,
     accountingConfigured,
+    accountingCallbacks,
     quickBooksEnvironment,
     owner,
     staff,
@@ -988,6 +996,9 @@ export default function Settings() {
                       {platform === "QUICKBOOKS"
                         ? ` (${connection?.environment || quickBooksEnvironment})`
                         : ""}
+                    </Text>
+                    <Text as="p" tone="subdued">
+                      Registered callback: {accountingCallbacks[platform]}
                     </Text>
                     {health?.error && (
                       <Banner tone="warning">

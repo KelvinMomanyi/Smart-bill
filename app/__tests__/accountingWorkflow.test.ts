@@ -559,6 +559,11 @@ function mockAuthorization(t: any) {
   t.mock.method(globalThis, "fetch", async (input: any) => {
     const url = new URL(String(input));
     let data: any;
+    if (url.pathname === "/identity/connect/authorize")
+      return new Response(null, {
+        status: 302,
+        headers: { Location: "https://login.xero.com/identity/user/login" },
+      });
     if (url.pathname.includes("/token")) {
       tokenCalls++;
       data = {

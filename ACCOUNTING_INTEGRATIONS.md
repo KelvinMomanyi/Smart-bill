@@ -48,6 +48,24 @@ QB_CLIENT_SECRET=...
 QB_ENVIRONMENT=production
 ```
 
+### Xero 401 before sign-in
+
+If Xero shows `401: Unauthorized` immediately after **Connect Xero**, the
+authorization request was rejected before a user could sign in. In the Xero
+Developer portal, verify all of the following:
+
+1. The application uses the **Auth Code** grant type, not a Custom Connection
+   or client-credentials-only flow.
+2. Its redirect URI is exactly
+   `https://smart-bill-self.vercel.app/accounting/xero/callback` (same scheme,
+   host, path, and no trailing slash).
+3. Production `XERO_CLIENT_ID` and `XERO_CLIENT_SECRET` come from that same
+   Xero application. Redeploy after changing either value.
+
+SmartBill now checks this registration before leaving Settings and reports the
+exact callback URI when Xero rejects it, instead of sending the merchant to
+Xero's generic error page.
+
 For a QuickBooks sandbox deployment, set `QB_ENVIRONMENT=sandbox`. Prefer a separate `QB_SANDBOX_CLIENT_ID` / `QB_SANDBOX_CLIENT_SECRET` pair. If that pair is absent, sandbox uses `QB_CLIENT_ID` / `QB_CLIENT_SECRET`; those values must then be sandbox credentials. Each saved connection retains its environment. Switching the environment variable does not silently move existing connections.
 
 Optionally configure `ACCOUNTING_TOKEN_KEY` as a base64-encoded 32-byte secret before connecting companies. If absent, SmartBill derives a separate encryption key from `SHOPIFY_API_SECRET` using HKDF. Keep the chosen key stable and backed up through your secret manager. Changing the key or changing the fallback Shopify secret without a token migration requires reconnecting accounting companies. Existing plaintext accounting tokens are encrypted on their next successful read/refresh.

@@ -85,6 +85,14 @@ export function normalizeInvoiceOcrText(text: string) {
     .replace(/\bU(?:5|S)(?:D|O)\b/gi, "USD")
     .replace(/\bKE5\b/gi, "KES")
     .replace(/\bEUR\b/gi, "EUR")
+    // A faint currency glyph is sometimes reduced to a leading "v". It is
+    // not reliable enough to identify a currency, but it must not prevent the
+    // adjacent amount from being parsed.
+    .replace(/\bv(?=\d[\d.,]*\s*$)/gm, "")
+    // Tesseract can prepend an S-shaped artifact to a compact service
+    // quantity ("S5hrs"). Keep this repair limited to time units so product
+    // identifiers such as S500 remain untouched.
+    .replace(/\b[Ss](\d+(?:[.,]\d+)?)\s*(hours?|hrs?)\b/g, "$1 $2")
     .replace(/\u00a7(?=\s*[\dOIlS])/g, "$")
     // Tesseract commonly reads a dollar glyph as S immediately before money.
     .replace(
@@ -439,6 +447,7 @@ function extractBillTo(lines: string[]) {
 function normalizeItemName(name: string) {
   return name
     .replace(/\s{2,}/g, " ")
+    .replace(/^\d{1,4}[.)]\s+(?=[\p{L}])/u, "")
     .replace(/^\W+|\W+$/g, "")
     .trim();
 }
@@ -461,6 +470,18 @@ const itemUnitToken =
   "(?:x|ea(?:ch)?|pcs?|pieces?|units?|unit|nos?|sets?|cases?|cartons?|pallets?|containers?|dozens?|gross|reams?|rolls?|kg|g|lb|lbs|hours?|hrs?|days?|boxes?|packs?|gallons?|litres?|liters?|ltr|metres?|meters?)";
 const itemUnitPattern =
   `(?:${itemUnitToken}\\.?\\s+)?`;
+const rateUnitSuffix = `(?:\\s*(?:/|per\\s+)${itemUnitToken}\\.?)?`;
+
+function isNonItemAdministrativeLine(line: string) {
+  return (
+    /^(?:bank(?:\s+(?:name|account))?|account(?:\s+(?:name|number|no\.?))?|iban|swift|bic|routing(?:\s+number)?|sort\s+code|payment\s+(?:terms?|instructions?|details?))\b\s*:/i.test(
+      line,
+    ) ||
+    /^(?:signature|authori[sz]ed\s+signatory|if\s+you\s+have\s+any\s+questions?|contact\s+us)\b/i.test(
+      line,
+    )
+  );
+}
 
 const columnWords = {
   description:
@@ -618,12 +639,13 @@ function parseItemLine(
   if (
     !cleanedLine ||
     itemHeaderHints(cleanedLine) ||
-    isItemSummaryLine(cleanedLine)
+    isItemSummaryLine(cleanedLine) ||
+    isNonItemAdministrativeLine(cleanedLine)
   )
     return null;
   const normalizedRow = cleanedLine.replace(
     new RegExp(
-      `\\b(${itemUnitToken})\\.?\\s+(${quantityPattern})(?=\\s+${currencyPattern}\\s*[+-]?\\d)`,
+      `(?<!/)\\b(${itemUnitToken})\\.?\\s+(${quantityPattern})(?=\\s+${currencyPattern}\\s*[+-]?\\d)`,
       "i",
     ),
     (_match, unit: string, quantity: string) => `${quantity} ${unit}`,
@@ -648,7 +670,7 @@ function parseItemLine(
 
   const completeRow = normalizedRow.match(
     new RegExp(
-      `^(.+)\\s+(${quantityPattern})\\s+${itemUnitPattern}${moneyPattern}\\s+${moneyPattern}$`,
+      `^(.+)\\s+(${quantityPattern})\\s+${itemUnitPattern}${moneyPattern}${rateUnitSuffix}\\s+${moneyPattern}$`,
       "i",
     ),
   );
@@ -663,7 +685,7 @@ function parseItemLine(
   // Tax, discount or accounting-code columns can sit between rate and amount.
   const rowWithExtraColumns = normalizedRow.match(
     new RegExp(
-      `^(.+)\\s+(${quantityPattern})\\s+${itemUnitPattern}${moneyPattern}\\s+(?:\\S+\\s+){1,3}${moneyPattern}$`,
+      `^(.+)\\s+(${quantityPattern})\\s+${itemUnitPattern}${moneyPattern}${rateUnitSuffix}\\s+(?:\\S+\\s+){1,3}${moneyPattern}$`,
       "i",
     ),
   );
@@ -680,7 +702,7 @@ function parseItemLine(
     "(?:\\d+(?:[.,]\\d+)?\\s*%|VAT|GST|TAX|EXEMPT|ZERO(?:\\s+RATED)?|T\\d+)";
   const rowWithTrailingColumns = normalizedRow.match(
     new RegExp(
-      `^(.+)\\s+(${quantityPattern})\\s+${itemUnitPattern}${moneyPattern}\\s+${moneyPattern}\\s+${trailingCode}(?:\\s+${trailingCode}){0,2}$`,
+      `^(.+)\\s+(${quantityPattern})\\s+${itemUnitPattern}${moneyPattern}${rateUnitSuffix}\\s+${moneyPattern}\\s+${trailingCode}(?:\\s+${trailingCode}){0,2}$`,
       "i",
     ),
   );
@@ -860,17 +882,21 @@ function canBufferItemLine(line: string, pending: string[]) {
 
 function extractItems(lines: string[]) {
   const columnMajor = extractColumnMajorItems(lines);
-  if (columnMajor.length) return columnMajor;
+  if (columnMajor.length) return { items: columnMajor, unparsedRows: 0 };
 
   const items: ParsedInvoiceItemWithSource[] = [];
+  let unparsedRows = 0;
   let inItemsSection = false;
+  let itemsSectionEnded = false;
   let hints = emptyItemHints();
   let pending: string[] = [];
 
   for (const line of lines) {
+    if (itemsSectionEnded) continue;
     const header = itemHeaderHints(line);
     if (header) {
       inItemsSection = true;
+      itemsSectionEnded = false;
       pending = [];
       hints = {
         seen: true,
@@ -889,10 +915,27 @@ function extractItems(lines: string[]) {
           true,
         );
         if (incomplete) items.push(incomplete);
+        else unparsedRows += 1;
       }
       inItemsSection = false;
+      itemsSectionEnded = true;
       pending = [];
       continue;
+    }
+
+    // A malformed row may be waiting in the buffer. If the current physical
+    // OCR line is already a complete item, keep it independent rather than
+    // letting the buffered text become part of its description.
+    if (pending.length) {
+      const direct = parseItemLine(line, hints, inItemsSection);
+      if (direct) {
+        const buffered = parseItemLine(pending.join(" "), hints, true);
+        if (buffered) items.push(buffered);
+        else unparsedRows += 1;
+        items.push(direct);
+        pending = [];
+        continue;
+      }
     }
 
     const combined = pending.length ? pending.join(" ") + " " + line : line;
@@ -905,15 +948,19 @@ function extractItems(lines: string[]) {
 
     if (inItemsSection && canBufferItemLine(line, pending)) {
       pending.push(line);
-      if (pending.length > 6) pending = pending.slice(-6);
+      if (pending.length > 6) {
+        pending = pending.slice(-6);
+        unparsedRows += 1;
+      }
       continue;
     }
 
-    const strict = parseItemLine(line);
+    const strict = itemsSectionEnded ? null : parseItemLine(line);
     if (strict && strict.amount >= strict.price) items.push(strict);
   }
 
-  return items;
+  if (pending.length) unparsedRows += 1;
+  return { items, unparsedRows };
 }
 
 // Credit note fields use the same "label then value" shape as invoices, but
@@ -959,11 +1006,19 @@ type ParsedMoneySource = {
   line: string;
 };
 
-function findMoneyOnLine(line?: string): ParsedMoneySource | undefined {
+function findMoneyOnLine(
+  line?: string,
+  options: { excludePercentages?: boolean } = {},
+): ParsedMoneySource | undefined {
   if (!line) return undefined;
 
   const matches = [...line.matchAll(new RegExp(moneyPattern, "gi"))];
-  const raw = matches.at(-1)?.[1];
+  const selected = [...matches].reverse().find((match) => {
+    if (!options.excludePercentages) return true;
+    const end = (match.index || 0) + match[0].length;
+    return !/^\s*%/.test(line.slice(end));
+  });
+  const raw = selected?.[1];
   const value = parseMoney(raw);
   return raw && value != null ? { raw, value, line } : undefined;
 }
@@ -971,14 +1026,30 @@ function findMoneyOnLine(line?: string): ParsedMoneySource | undefined {
 function findMoneyByLabel(
   lines: string[],
   labelPattern: RegExp,
-  options: { reverse?: boolean; exclude?: RegExp } = {},
+  options: {
+    reverse?: boolean;
+    exclude?: RegExp;
+    excludePercentages?: boolean;
+  } = {},
 ) {
   const source = options.reverse ? [...lines].reverse() : lines;
-  const line = source.find(
-    (candidate) =>
-      labelPattern.test(candidate) && !options.exclude?.test(candidate),
-  );
-  return findMoneyOnLine(line);
+  for (const candidate of source) {
+    if (!labelPattern.test(candidate) || options.exclude?.test(candidate))
+      continue;
+    const value = findMoneyOnLine(candidate, options);
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function findPercentageByLabel(lines: string[], labelPattern: RegExp) {
+  for (const line of lines) {
+    if (!labelPattern.test(line)) continue;
+    const raw = line.match(/([+-]?\d+(?:[.,]\d+)?)\s*%/)?.[1];
+    const value = parseMoney(raw);
+    if (value != null) return value;
+  }
+  return undefined;
 }
 
 function roundParsedMoney(value: number) {
@@ -1227,7 +1298,11 @@ export function parseInvoiceText(text: string, dateOrder: "DMY" | "MDY" = "DMY")
   );
   const date = findInvoiceDate(lines, dateOrder);
   const subtotalSource = findMoneyByLabel(lines, /(?:subtotal|sub-total)\b/i);
-  const taxSource = findMoneyByLabel(lines, /\b(?:tax|vat|gst)\b/i);
+  const taxLabel = /\b(?:tax|vat|gst)\b/i;
+  const taxSource = findMoneyByLabel(lines, taxLabel, {
+    excludePercentages: true,
+  });
+  const taxRate = findPercentageByLabel(lines, taxLabel);
   const totalSource = findMoneyByLabel(
     lines,
     /(?:amount\s+due|grand\s+total|balance\s+due|invoice\s+total|\btotal\b)/i,
@@ -1236,7 +1311,8 @@ export function parseInvoiceText(text: string, dateOrder: "DMY" | "MDY" = "DMY")
       reverse: true,
     },
   );
-  const sourceItems = extractItems(lines);
+  const extractedItems = extractItems(lines);
+  const sourceItems = extractedItems.items;
   const summary = repairSummaryDecimals(
     subtotalSource,
     taxSource,
@@ -1244,8 +1320,16 @@ export function parseInvoiceText(text: string, dateOrder: "DMY" | "MDY" = "DMY")
     sourceItems,
   );
   const subtotal = summary.subtotal;
-  const tax = summary.tax;
   const total = summary.total ?? subtotal ?? 0;
+  const inferredTax =
+    summary.tax == null &&
+    subtotal != null &&
+    summary.total != null &&
+    summary.total >= subtotal &&
+    (taxRate != null || moneyDifference(summary.total, subtotal) > 0.011)
+      ? roundParsedMoney(summary.total - subtotal)
+      : undefined;
+  const tax = summary.tax ?? inferredTax;
   const itemTarget = subtotal ?? (summary.total != null ? total - (tax ?? 0) : undefined);
   const targetSource = subtotalSource ?? totalSource;
   const trustedItemTarget =
@@ -1269,6 +1353,21 @@ export function parseInvoiceText(text: string, dateOrder: "DMY" | "MDY" = "DMY")
     warnings.push(
       "Invoice currency was not found. SmartBill assumed USD; confirm the currency before approval.",
     );
+  if (extractedItems.unparsedRows > 0)
+    warnings.push(
+      `${extractedItems.unparsedRows} row${extractedItems.unparsedRows === 1 ? "" : "s"} inside the item table could not be parsed confidently. Compare every populated line with the original before approval.`,
+    );
+  if (inferredTax != null)
+    warnings.push(
+      `${taxRate != null ? "The invoice showed a tax rate but no tax amount." : "The invoice did not show a separate tax amount."} SmartBill inferred ${inferredTax.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} from total minus subtotal; confirm it before approval.`,
+    );
+  if (taxRate != null && subtotal != null && inferredTax != null) {
+    const percentageTax = roundParsedMoney((subtotal * taxRate) / 100);
+    if (moneyDifference(percentageTax, inferredTax) > 0.011)
+      warnings.push(
+        `The printed ${taxRate}% tax equals ${percentageTax.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}, but total minus subtotal is ${inferredTax.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}. Confirm the invoice total and tax before approval.`,
+      );
+  }
   const detectedCharges = repairedItems.items
     .filter((item) => detectChargeCategory(item.name, item.sku))
     .reduce((total, item) => total + lineValue(item), 0);

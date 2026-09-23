@@ -386,3 +386,78 @@ test("OCR normalization restores a decimal point read as whitespace", () => {
   assert.match(normalized, /\$9\.06/);
   assert.equal(parseInvoiceText(normalized).total, 9.06);
 });
+
+test("service rows with per-hour rates stay separate and bank details are excluded", () => {
+  const parsed = parseInvoiceText(`
+123 Anywhere St., Any City, ST 12345
+Tel: +123-456-7890
+
+INVOICE
+
+Invoice No: ABC-OCT22-001 Date: 12 October, 2022
+Bill to: Liceria & Co.
+
+123 Anywhere St,
+Any City, ST 12345
+
+Tel: +123-456-7890
+Email: customer email id
+
+item Description Qty Unit Price Amount
+1. Logo Design 2 hrs 2000/hr 4000
+2. Advertising Design S5hrs 500/hr 2500
+3. Poster Design 4 hrs 1000/hr v4000
+4. Brochure Design 5 hrs 2000/hr 10000
+Subtotal v20500
+Payment Terms: [Payment Tax 10%
+terms, such as "Payment due Total 22500
+within 30 days"]
+Bank Name: Olivia Wilson Signature
+
+Bank Account: 0123 4567 8901
+
+If you have any question please contact : hello@company.com
+  `);
+
+  assert.equal(parsed.invoiceNumber, "ABC-OCT22-001");
+  assert.equal(parsed.date, "2022-10-12");
+  assert.deepEqual(
+    parsed.items.map((item) => [
+      item.name,
+      item.quantity,
+      item.rate,
+      item.amount,
+    ]),
+    [
+      ["Logo Design", 2, 2000, 4000],
+      ["Advertising Design", 5, 500, 2500],
+      ["Poster Design", 4, 1000, 4000],
+      ["Brochure Design", 5, 2000, 10000],
+    ],
+  );
+  assert.ok(!parsed.items.some((item) => /bank/i.test(item.name)));
+  assert.equal(parsed.subtotal, 20500);
+  assert.equal(parsed.tax, 2000);
+  assert.equal(parsed.total, 22500);
+  assert.ok(parsed.warnings?.some((warning) => /10%.*2,050.*2,000/i.test(warning)));
+});
+
+test("an unreadable row cannot merge into the next complete item or numeric footer", () => {
+  const parsed = parseInvoiceText(`
+Invoice No: SAFE-ROWS-1
+Date: 23 September 2026
+Description Qty Unit Price Amount
+Unreadable damaged OCR row without values
+Widget replacement 2 units 10.00 20.00
+Subtotal 20.00
+Total USD 20.00
+Payment reference: 111 222 333
+Routing number: 444 555 666
+  `);
+
+  assert.deepEqual(
+    parsed.items.map((item) => [item.name, item.quantity, item.rate, item.amount]),
+    [["Widget replacement", 2, 10, 20]],
+  );
+  assert.ok(parsed.warnings?.some((warning) => /could not be parsed confidently/i.test(warning)));
+});

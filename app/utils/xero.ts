@@ -19,6 +19,39 @@ export async function getXeroAuthUrl(redirectUri: string, state: string) {
   }).toString();
   return url.toString();
 }
+export async function assertXeroAuthorizationConfigured(redirectUri: string) {
+  const authorizationUrl = await getXeroAuthUrl(
+    redirectUri,
+    "smartbill-configuration-check",
+  );
+  let response: Response;
+  try {
+    response = await fetch(authorizationUrl, {
+      redirect: "manual",
+      headers: { Accept: "text/html" },
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch {
+    return;
+  }
+  const location = response.headers.get("location");
+  const destination = location
+    ? new URL(location, authorizationUrl)
+    : null;
+  const rejectedBeforeSignIn =
+    response.status === 401 ||
+    (destination?.hostname === "login.xero.com" &&
+      destination.pathname === "/identity/error");
+  if (!rejectedBeforeSignIn) return;
+  throw new Error(
+    [
+      "Xero rejected this OAuth application before sign-in.",
+      "In the Xero Developer portal, use an app with the Auth Code grant type and register this exact redirect URI:",
+      redirectUri,
+      "Confirm XERO_CLIENT_ID and XERO_CLIENT_SECRET belong to that same app, update the production environment, and redeploy.",
+    ].join(" "),
+  );
+}
 async function tokenRequest(parameters: Record<string, string>) {
   return accountingRequest("Xero", "https://identity.xero.com/connect/token", {
     method: "POST",

@@ -17,6 +17,7 @@ import {
   sealAccountingSecret,
 } from "../utils/accountingTokens.server";
 import {
+  assertXeroAuthorizationConfigured,
   getXeroAuthUrl,
   getXeroConnections,
   getXeroToken,
@@ -75,7 +76,8 @@ export async function createAuthorization(
   // Validate provider configuration before leaving the embedded app.
   const state = createAccountingState(shop, platform, id);
   const callback = `${accountingBaseUrl()}/accounting/${platform.toLowerCase()}/callback`;
-  if (platform === "XERO") await getXeroAuthUrl(callback, state);
+  if (platform === "XERO")
+    await assertXeroAuthorizationConfigured(callback);
   else await getQuickBooksAuthUrl(callback, state, environment);
   await prisma.accountingAuthorization.deleteMany({
     where: { expiresAt: { lt: new Date() } },
