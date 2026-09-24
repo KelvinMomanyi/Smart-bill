@@ -35,8 +35,10 @@ import {
 } from "../utils/xero";
 import { formatForPlatform } from "../utils/accountingFormat";
 import {
+  automaticXeroBillMapping,
   validateBillMapping,
   purchaseTaxComponents,
+  suggestedXeroPurchaseTax,
   type AccountingCatalog,
   type BillMapping,
 } from "../utils/accountingValidation";
@@ -282,6 +284,67 @@ test("zero-rate Xero choices explain how to configure purchase tax", () => {
         companyKey: xero.companyKey,
       }),
     /all 0%.*13\.33% invoice-level effective rate.*Do not use Tax on Sales/s,
+  );
+});
+test("SmartBill dynamically matches invoice tax rates to existing Xero purchase rates", () => {
+  const dynamicCatalog: AccountingCatalog = {
+    ...catalog,
+    platform: "XERO",
+    companyKey: "XERO:production:abc",
+    taxes: [
+      {
+        id: "TAX625",
+        name: "Purchase tax 6.25%",
+        rate: 6.25,
+        expense: true,
+        asset: true,
+        supported: true,
+        components: [],
+      },
+      {
+        id: "TAX10",
+        name: "Purchase tax 10%",
+        rate: 10,
+        expense: true,
+        asset: true,
+        supported: true,
+        components: [],
+      },
+    ],
+  };
+  const sixTwentyFiveInvoice = {
+    ...invoice,
+    tax: 9.06,
+    total: 154.06,
+    items: [
+      { id: "a", name: "A", quantity: 1, price: 100, amount: 100 },
+      { id: "b", name: "B", quantity: 1, price: 30, amount: 30 },
+      { id: "c", name: "C", quantity: 1, price: 15, amount: 15 },
+    ],
+  };
+  const tenPercentInvoice = {
+    ...invoice,
+    tax: 301,
+    total: 3311,
+    items: [
+      { id: "a", name: "A", quantity: 1, price: 3010, amount: 3010 },
+    ],
+  };
+  assert.equal(
+    suggestedXeroPurchaseTax(sixTwentyFiveInvoice, dynamicCatalog)?.id,
+    "TAX625",
+  );
+  assert.equal(
+    suggestedXeroPurchaseTax(tenPercentInvoice, dynamicCatalog)?.id,
+    "TAX10",
+  );
+  assert.deepEqual(
+    automaticXeroBillMapping(
+      tenPercentInvoice,
+      { xeroAccountCode: "10" },
+      dynamicCatalog,
+    )?.lines.map((line) => line.taxCodeId),
+    ["TAX10"],
   );
 });
 test("Xero tax allocation preserves document-level rounding", () => {

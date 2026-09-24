@@ -42,6 +42,62 @@ export function isUsCompany(country: string) {
     country.toUpperCase(),
   );
 }
+export function suggestedXeroPurchaseTax(
+  invoice: any,
+  catalog: AccountingCatalog,
+) {
+  if (catalog.platform !== "XERO") return undefined;
+  const documentTax = money(Number(invoice.tax || 0));
+  const amounts = (invoice.items || []).map((item: any) =>
+    money(item.amount ?? item.price * item.quantity),
+  );
+  if (!amounts.length) return undefined;
+  if (documentTax === 0)
+    return catalog.taxes.find(
+      (tax) =>
+        tax.supported &&
+        tax.rate === 0 &&
+        (tax.id === "NONE" || /(?:exempt|no tax)/i.test(tax.name)),
+    );
+  const matches = catalog.taxes.filter((tax) => {
+    if (!tax.supported || tax.rate <= 0) return false;
+    const aggregateTax = money(
+      amounts.reduce((sum: number, amount: number) => {
+        return sum + (amount * tax.rate) / 100;
+      }, 0),
+    );
+    const lineRoundedTax = money(
+      amounts.reduce((sum: number, amount: number) => {
+        return sum + money((amount * tax.rate) / 100);
+      }, 0),
+    );
+    return aggregateTax === documentTax || lineRoundedTax === documentTax;
+  });
+  return matches.length === 1 ? matches[0] : undefined;
+}
+export function automaticXeroBillMapping(
+  invoice: any,
+  settings: any,
+  catalog: AccountingCatalog,
+): BillMapping | undefined {
+  if (catalog.platform !== "XERO") return undefined;
+  const tax = suggestedXeroPurchaseTax(invoice, catalog);
+  const account = catalog.accounts.find(
+    (candidate) => candidate.id === settings?.xeroAccountCode,
+  );
+  if (!tax || !account) return undefined;
+  return {
+    companyKey: catalog.companyKey,
+    lines: invoice.items.map((item: any) => ({
+      itemId: item.id,
+      accountId: account.id,
+      taxCodeId: tax.id,
+    })),
+    ...(invoice.currency !== catalog.homeCurrency && invoice.fxRate
+      ? { exchangeRate: invoice.fxRate }
+      : {}),
+  };
+}
 export function purchaseTaxComponents(
   amount: number,
   components: AccountingCatalog["taxes"][number]["components"],

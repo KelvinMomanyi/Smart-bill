@@ -25,6 +25,7 @@ import {
   type AccountingPlatform,
 } from "../utils/accountingFormat";
 import {
+  automaticXeroBillMapping,
   validateBillMapping,
   type BillMapping,
 } from "../utils/accountingValidation";
@@ -194,9 +195,14 @@ export async function exportApprovedInvoice({
     prisma.shopSettings.findUnique({ where: { shop } }),
     fetchAccountingCatalog(connection),
   ]);
-  const mapping = (invoice.accountingMapping as any)?.[platform] as
+  const savedMapping = (invoice.accountingMapping as any)?.[platform] as
     | BillMapping
     | undefined;
+  const mapping =
+    savedMapping ||
+    (platform === "XERO"
+      ? automaticXeroBillMapping(invoice, settings, catalog)
+      : undefined);
   const validated = validateBillMapping(invoice, settings, catalog, mapping);
   const payload =
     platform === "XERO"

@@ -15,7 +15,11 @@ import { requireAdmin } from "../utils/rbac.server";
 import { getAccountingCatalog } from "../services/accountingCatalog.server";
 import { livePlatform } from "../services/accountingConnection.server";
 import { saveInvoiceAccountingMapping } from "../services/accountingExport.server";
-import { isUsCompany, type BillMapping } from "../utils/accountingValidation";
+import {
+  isUsCompany,
+  suggestedXeroPurchaseTax,
+  type BillMapping,
+} from "../utils/accountingValidation";
 export async function loader({ request, params }: LoaderFunctionArgs) {
   const { session } = await requireAdmin(request);
   const invoice = await prisma.invoice.findFirst({
@@ -88,11 +92,15 @@ export default function InvoiceAccountingDetails() {
   const locked = Boolean(entry && entry.status !== "REJECTED");
   const us =
     catalog && platform === "QUICKBOOKS" && isUsCompany(catalog.country);
+  const suggestedXeroTax =
+    catalog && platform === "XERO"
+      ? suggestedXeroPurchaseTax(invoice, catalog)
+      : undefined;
   const xeroNeedsTaxSetup =
     catalog &&
     platform === "XERO" &&
     Number(invoice.tax || 0) > 0 &&
-    !catalog.taxes.some((tax) => tax.rate > 0);
+    !suggestedXeroTax;
   const invoiceNet = invoice.items.reduce(
     (sum, item) => sum + Number(item.amount ?? item.price * item.quantity),
     0,
@@ -140,13 +148,20 @@ export default function InvoiceAccountingDetails() {
                 </Text>
                 {xeroNeedsTaxSetup && (
                   <Banner tone="warning">
-                    Xero returned only 0% purchase tax rates, but this invoice
-                    contains {Number(invoice.tax || 0).toFixed(2)} tax on{" "}
-                    {invoiceNet.toFixed(2)} net (an invoice-level effective
-                    rate of {invoiceEffectiveTaxRate.toFixed(2)}%). Create or
-                    update the appropriate purchase tax rate in Xero, then
-                    reload this page. Do not use Tax on Sales for a supplier
-                    bill.
+                    SmartBill detected an invoice-level effective tax rate of{" "}
+                    {invoiceEffectiveTaxRate.toFixed(2)}%, but Xero did not
+                    return one unique purchase tax rate that reproduces{" "}
+                    {Number(invoice.tax || 0).toFixed(2)} tax on{" "}
+                    {invoiceNet.toFixed(2)} net. Create or review the matching
+                    purchase rate in Xero, then reload this page.
+                  </Banner>
+                )}
+                {suggestedXeroTax && Number(invoice.tax || 0) > 0 && (
+                  <Banner tone="info">
+                    SmartBill matched the invoice tax to{" "}
+                    {suggestedXeroTax.name} ({suggestedXeroTax.rate.toFixed(2)}
+                    %) in Xero and preselected it for each line. Review any
+                    exempt or differently taxed lines before saving.
                   </Banner>
                 )}
                 {us && (
@@ -197,6 +212,7 @@ export default function InvoiceAccountingDetails() {
                             required
                             defaultValue={
                               line?.taxCodeId ||
+                              suggestedXeroTax?.id ||
                               (platform === "XERO"
                                 ? settings?.xeroTaxType
                                 : settings?.quickBooksTaxCodeId) ||
