@@ -473,6 +473,43 @@ Total USD 159.38
   assert.equal(parsed.total, 159.38);
 });
 
+test("standalone OCR quantity lookalikes are repaired when line arithmetic proves them", () => {
+  const parsed = parseInvoiceText(`
+John Smith
+
+Company Name
+
+456 Main Street Issued Date: 01/01/2018
+Main, WI 43457 Expiry Date: 31/12/2018
+(B83) RBA KBRH
+customer @email com
+
+TOTAL DUE
+$3,311.00
+Product 1 2 $45.00 $90.00
+Product 2 3 $100.00 $300.00
+Service 1 1 $20.00 $20.00
+Service 2 S $520.00 $2,600.00
+
+SUB TOTAL $3,010.00
+TAX (%) 10.00%
+  `);
+
+  assert.deepEqual(
+    parsed.items.map((item) => [item.name, item.quantity, item.rate, item.amount]),
+    [
+      ["Product 1", 2, 45, 90],
+      ["Product 2", 3, 100, 300],
+      ["Service 1", 1, 20, 20],
+      ["Service 2", 5, 520, 2600],
+    ],
+  );
+  assert.equal(parsed.subtotal, 3010);
+  assert.equal(parsed.tax, 301);
+  assert.equal(parsed.total, 3311);
+  assert.ok(parsed.warnings?.some((warning) => /quantity digit as a letter/i.test(warning)));
+});
+
 test("an unreadable row cannot merge into the next complete item or numeric footer", () => {
   const parsed = parseInvoiceText(`
 Invoice No: SAFE-ROWS-1

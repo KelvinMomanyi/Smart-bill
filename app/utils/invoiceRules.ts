@@ -41,7 +41,7 @@ export function invoiceIssues(invoice: InvoiceAmounts) {
   }
   if (!Number.isFinite(invoice.tax ?? 0) || (invoice.tax ?? 0) < 0 ||
       Math.abs(roundMoney(goods + charges + (invoice.tax ?? 0)) - invoice.total) > 0.011) {
-    issues.push("Net product and charge amounts plus tax must match the invoice total.");
+    issues.push("Captured net lines plus tax do not match the invoice total. A line item may be missing or contain an OCR error; compare every line with the original before approval.");
   }
   return issues;
 }

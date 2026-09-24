@@ -40,6 +40,7 @@ type ParsedInvoiceItemWithSource = ParsedInvoiceItem & {
   // mistaking a correctly printed value such as "10.00" for the integer 10.
   _rawRate?: string;
   _rawAmount?: string;
+  _quantityRepaired?: boolean;
 };
 
 export type ParsedInvoice = {
@@ -521,7 +522,7 @@ function itemHeaderHints(line: string): ItemColumnHints | null {
 
 function isItemSummaryLine(line: string) {
   if (
-    /^\s*(?:subtotal|sub-total|tax|sales\s+tax|vat|gst|grand\s+total|invoice\s+total|amount\s+due|balance\s+due|net\s+amount)\b/i.test(
+    /^\s*(?:sub[\s-]*total|tax|sales\s+tax|vat|gst|grand\s+total|invoice\s+total|amount\s+due|balance\s+due|net\s+amount)\b/i.test(
       line,
     )
   )
@@ -667,6 +668,41 @@ function parseItemLine(
       packSize: detectPackSize(item.name, supplierUoM) || undefined,
     };
   };
+
+  // A quantity of 5 or 1 is frequently read as a standalone S, I, l or |.
+  // Only repair it when the printed rate and amount prove the arithmetic, so
+  // normal descriptions and SKU characters are never rewritten globally.
+  const monetaryCells = [
+    ...normalizedRow.matchAll(new RegExp(moneyPattern, "gi")),
+  ];
+  const [rateCell, amountCell] = monetaryCells.slice(-2);
+  const rateCellIndex = rateCell?.index;
+  const amountCellEnd =
+    amountCell?.index == null
+      ? -1
+      : amountCell.index + amountCell[0].length;
+  const quantityPrefix =
+    rateCellIndex == null
+      ? null
+      : normalizedRow.slice(0, rateCellIndex).trim().match(/^(.+)\s+([SOIl|])$/i);
+  if (
+    quantityPrefix &&
+    amountCellEnd >= 0 &&
+    !normalizedRow.slice(amountCellEnd).trim()
+  ) {
+    const repaired = buildParsedItem(
+      quantityPrefix[1],
+      normalizeOcrDigits(quantityPrefix[2]),
+      rateCell[1],
+      amountCell[1],
+      true,
+    );
+    if (
+      repaired &&
+      Math.abs(repaired.quantity * repaired.rate - repaired.amount) <= 0.011
+    )
+      return withUnit({ ...repaired, _quantityRepaired: true });
+  }
 
   const completeRow = normalizedRow.match(
     new RegExp(
@@ -1039,12 +1075,22 @@ function findMoneyByLabel(
     excludePercentages?: boolean;
   } = {},
 ) {
-  const source = options.reverse ? [...lines].reverse() : lines;
-  for (const candidate of source) {
+  const source = lines.map((candidate, index) => ({ candidate, index }));
+  if (options.reverse) source.reverse();
+  for (const { candidate, index } of source) {
     if (!labelPattern.test(candidate) || options.exclude?.test(candidate))
       continue;
     const value = findMoneyOnLine(candidate, options);
     if (value) return value;
+    const followingLine = lines[index + 1];
+    if (
+      !/\d/.test(candidate) &&
+      followingLine &&
+      new RegExp("^\\s*" + moneyPattern + "\\s*$", "i").test(followingLine)
+    ) {
+      const followingValue = findMoneyOnLine(followingLine, options);
+      if (followingValue) return followingValue;
+    }
   }
   return undefined;
 }
@@ -1289,7 +1335,12 @@ function repairItemDecimals(
 }
 
 function withoutItemSource(item: ParsedInvoiceItemWithSource): ParsedInvoiceItem {
-  const { _rawRate: _ignoredRate, _rawAmount: _ignoredAmount, ...parsed } = item;
+  const {
+    _rawRate: _ignoredRate,
+    _rawAmount: _ignoredAmount,
+    _quantityRepaired: _ignoredQuantityRepair,
+    ...parsed
+  } = item;
   return parsed;
 }
 
@@ -1304,7 +1355,7 @@ export function parseInvoiceText(text: string, dateOrder: "DMY" | "MDY" = "DMY")
     findValue(lines, [/(?:due\s+date|payment\s+due)\s*:?\s*(.+)$/i]), dateOrder,
   );
   const date = findInvoiceDate(lines, dateOrder);
-  const subtotalSource = findMoneyByLabel(lines, /(?:subtotal|sub-total)\b/i, {
+  const subtotalSource = findMoneyByLabel(lines, /sub[\s-]*total\b/i, {
     reverse: true,
   });
   const taxLabel = /\b(?:tax|vat|gst)\b/i;
@@ -1317,7 +1368,7 @@ export function parseInvoiceText(text: string, dateOrder: "DMY" | "MDY" = "DMY")
     lines,
     /(?:amount\s+due|grand\s+total|balance\s+due|invoice\s+total|\btotal\b)/i,
     {
-      exclude: /(?:subtotal|sub-total|tax|vat|gst)/i,
+      exclude: /(?:sub[\s-]*total|tax|vat|gst)/i,
       reverse: true,
     },
   );
@@ -1366,6 +1417,10 @@ export function parseInvoiceText(text: string, dateOrder: "DMY" | "MDY" = "DMY")
   if (extractedItems.unparsedRows > 0)
     warnings.push(
       `${extractedItems.unparsedRows} row${extractedItems.unparsedRows === 1 ? "" : "s"} inside the item table could not be parsed confidently. Compare every populated line with the original before approval.`,
+    );
+  if (sourceItems.some((item) => item._quantityRepaired))
+    warnings.push(
+      "OCR read a quantity digit as a letter on one or more lines. SmartBill repaired it only where quantity × unit price matched the printed line amount; confirm the repaired quantities before approval.",
     );
   if (inferredTax != null)
     warnings.push(
