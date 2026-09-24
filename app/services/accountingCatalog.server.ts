@@ -46,7 +46,11 @@ export async function fetchAccountingCatalog(
         .filter(
           (t: any) =>
             t.Status === "ACTIVE" &&
-            (t.CanApplyToExpenses || t.CanApplyToAssets),
+            (t.CanApplyToExpenses || t.CanApplyToAssets) &&
+            !(
+              String(t.TaxType).toUpperCase() === "OUTPUT" &&
+              String(t.Name).trim().toLowerCase() === "tax on sales"
+            ),
         )
         .map((t: any) => ({
           id: t.TaxType,

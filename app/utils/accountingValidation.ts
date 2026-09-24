@@ -137,6 +137,7 @@ export function validateBillMapping(
     throw new Error(
       "Invoice lines changed. Review the accounting choices again.",
     );
+  const rawTaxAmounts: number[] = [];
   const lines = invoice.items.map((item: any) => {
     const override = mapping?.lines.find((l) => l.itemId === item.id);
     const accountId =
@@ -181,24 +182,62 @@ export function validateBillMapping(
       !us && catalog.platform === "QUICKBOOKS"
         ? purchaseTaxComponents(amount, tax!.components)
         : [];
-    const taxAmount = us
+    const rawTaxAmount = us
       ? 0
       : catalog.platform === "XERO"
-        ? money((amount * tax!.rate) / 100)
-        : money(components.reduce((sum, c) => sum + c.amount, 0));
+        ? (amount * tax!.rate) / 100
+        : components.reduce((sum, c) => sum + c.amount, 0);
+    rawTaxAmounts.push(rawTaxAmount);
     return {
       itemId: item.id,
       accountId: account.id,
       taxCodeId: us ? undefined : tax!.id,
       amount,
-      taxAmount,
+      taxAmount: money(rawTaxAmount),
       components,
     };
   });
-  const expectedTax = money(
+  let expectedTax = money(
     lines.reduce((sum: number, l: any) => sum + l.taxAmount, 0),
   );
   const documentTax = money(Number(invoice.tax || 0));
+  const aggregateXeroTax = money(
+    rawTaxAmounts.reduce((sum, taxAmount) => sum + taxAmount, 0),
+  );
+  if (
+    catalog.platform === "XERO" &&
+    aggregateXeroTax === documentTax &&
+    expectedTax !== documentTax
+  ) {
+    let cumulativeTax = 0;
+    let allocatedTax = 0;
+    lines.forEach((line: { taxAmount: number }, index: number) => {
+      cumulativeTax += rawTaxAmounts[index];
+      const targetTax = money(cumulativeTax);
+      line.taxAmount = money(targetTax - allocatedTax);
+      allocatedTax = targetTax;
+    });
+    expectedTax = money(
+      lines.reduce((sum: number, line: any) => sum + line.taxAmount, 0),
+    );
+  }
+  if (
+    catalog.platform === "XERO" &&
+    documentTax > 0 &&
+    expectedTax === 0 &&
+    lines.every(
+      (line: { taxCodeId?: string }) =>
+        catalog.taxes.find((tax) => tax.id === line.taxCodeId)?.rate === 0,
+    )
+  ) {
+    const netTotal = money(
+      lines.reduce((sum: number, line: any) => sum + line.amount, 0),
+    );
+    const effectiveRate = netTotal > 0 ? (documentTax / netTotal) * 100 : 0;
+    throw new Error(
+      `The selected Xero purchase tax rates are all 0%, so they calculate 0.00 tax. The invoice has ${documentTax.toFixed(2)} tax on ${netTotal.toFixed(2)} net (${effectiveRate.toFixed(2)}% invoice-level effective rate). Create or update the appropriate purchase tax rate in Xero, reload Accounting details, and select it for each taxable line. Do not use Tax on Sales for a supplier bill.`,
+    );
+  }
   if (!us && Math.abs(expectedTax - documentTax) > 0.011)
     throw new Error(
       `Selected purchase taxes total ${expectedTax.toFixed(2)}, but the invoice tax is ${documentTax.toFixed(2)}. Check the net line amounts and tax codes in Accounting details.`,

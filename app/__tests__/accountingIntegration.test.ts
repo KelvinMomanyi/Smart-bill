@@ -268,6 +268,74 @@ test("invalid tax totals, sales-only tax and stale line/account mappings fail be
     /cannot be used/,
   );
 });
+test("zero-rate Xero choices explain how to configure purchase tax", () => {
+  const xero = {
+    ...catalog,
+    platform: "XERO" as const,
+    companyKey: "XERO:production:abc",
+    taxes: catalog.taxes.map((tax) => ({ ...tax, rate: 0, components: [] })),
+  };
+  assert.throws(
+    () =>
+      validateBillMapping(invoice, {}, xero, {
+        ...mapping,
+        companyKey: xero.companyKey,
+      }),
+    /all 0%.*13\.33% invoice-level effective rate.*Do not use Tax on Sales/s,
+  );
+});
+test("Xero tax allocation preserves document-level rounding", () => {
+  const roundingInvoice = {
+    ...invoice,
+    subtotal: 145,
+    tax: 9.06,
+    total: 154.06,
+    items: [
+      { id: "line-1", name: "Cables", quantity: 1, price: 100, amount: 100 },
+      { id: "line-2", name: "Pedals", quantity: 1, price: 30, amount: 30 },
+      { id: "line-3", name: "Labor", quantity: 1, price: 15, amount: 15 },
+    ],
+  };
+  const xero = {
+    ...catalog,
+    platform: "XERO" as const,
+    companyKey: "XERO:production:abc",
+    taxes: [
+      {
+        id: "TAX001",
+        name: "Purchase tax 6.25%",
+        rate: 6.25,
+        expense: true,
+        asset: true,
+        supported: true,
+        components: [],
+      },
+    ],
+  };
+  const validated = validateBillMapping(roundingInvoice, {}, xero, {
+    companyKey: xero.companyKey,
+    lines: roundingInvoice.items.map((item) => ({
+      itemId: item.id,
+      accountId: "10",
+      taxCodeId: "TAX001",
+    })),
+  });
+  assert.deepEqual(
+    validated.lines.map((line: { taxAmount: number }) => line.taxAmount),
+    [6.25, 1.88, 0.93],
+  );
+  assert.equal(validated.expectedTax, 9.06);
+  const payload = formatForPlatform(roundingInvoice, "XERO", { validated });
+  assert.equal(
+    Number(
+      payload.LineItems.reduce(
+        (sum: number, line: any) => sum + line.TaxAmount,
+        0,
+      ).toFixed(2),
+    ),
+    9.06,
+  );
+});
 test("compound purchase taxes use the declared calculation order", () => {
   const components = purchaseTaxComponents(100, [
     { id: "a", rate: 5, kind: "TaxOnAmount", order: 1, taxOnOrder: 0 },
@@ -775,8 +843,11 @@ test("Xero catalogs filter inactive accounts and sales-only tax codes", async (t
                 },
                 {
                   TaxType: "OUTPUT",
+                  Name: "Tax on Sales",
                   Status: "ACTIVE",
                   CanApplyToRevenue: true,
+                  CanApplyToExpenses: true,
+                  EffectiveRate: 0,
                 },
               ],
             }

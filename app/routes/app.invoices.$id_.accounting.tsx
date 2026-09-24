@@ -88,6 +88,17 @@ export default function InvoiceAccountingDetails() {
   const locked = Boolean(entry && entry.status !== "REJECTED");
   const us =
     catalog && platform === "QUICKBOOKS" && isUsCompany(catalog.country);
+  const xeroNeedsTaxSetup =
+    catalog &&
+    platform === "XERO" &&
+    Number(invoice.tax || 0) > 0 &&
+    !catalog.taxes.some((tax) => tax.rate > 0);
+  const invoiceNet = invoice.items.reduce(
+    (sum, item) => sum + Number(item.amount ?? item.price * item.quantity),
+    0,
+  );
+  const invoiceEffectiveTaxRate =
+    invoiceNet > 0 ? (Number(invoice.tax || 0) / invoiceNet) * 100 : 0;
   return (
     <Page
       title={`${platform} accounting details`}
@@ -127,6 +138,17 @@ export default function InvoiceAccountingDetails() {
                   Tax codes must reproduce the approved invoice&apos;s tax
                   total.
                 </Text>
+                {xeroNeedsTaxSetup && (
+                  <Banner tone="warning">
+                    Xero returned only 0% purchase tax rates, but this invoice
+                    contains {Number(invoice.tax || 0).toFixed(2)} tax on{" "}
+                    {invoiceNet.toFixed(2)} net (an invoice-level effective
+                    rate of {invoiceEffectiveTaxRate.toFixed(2)}%). Create or
+                    update the appropriate purchase tax rate in Xero, then
+                    reload this page. Do not use Tax on Sales for a supplier
+                    bill.
+                  </Banner>
+                )}
                 {us && (
                   <Text as="p">
                     US purchase sales tax uses the separate expense account
@@ -184,7 +206,7 @@ export default function InvoiceAccountingDetails() {
                             <option value="">Choose tax</option>
                             {catalog.taxes.map((t) => (
                               <option key={t.id} value={t.id}>
-                                {t.name} ({t.id})
+                                {t.name} — {t.rate.toFixed(2)}% ({t.id})
                               </option>
                             ))}
                           </select>
