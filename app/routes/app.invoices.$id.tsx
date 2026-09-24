@@ -702,6 +702,9 @@ function InvoiceEditor({
                     ))}
                   </select>
                 </label>
+                <Text as="h3" variant="headingSm">
+                  Captured line items ({items.length})
+                </Text>
                 {items.map((item, index) => (
                   <fieldset
                     key={index}
@@ -915,7 +918,7 @@ function InvoiceEditor({
                     ]);
                   }}
                 >
-                  Add line / freight charge
+                  Add missing invoice line / freight charge
                 </Button>
                 <label>
                   Subtotal, excluding tax{" "}

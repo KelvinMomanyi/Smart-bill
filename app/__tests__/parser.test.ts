@@ -442,6 +442,37 @@ If you have any question please contact : hello@company.com
   assert.ok(parsed.warnings?.some((warning) => /10%.*2,050.*2,000/i.test(warning)));
 });
 
+test("multi-page item tables continue after page subtotals", () => {
+  const parsed = parseInvoiceText(`
+Invoice No: MULTI-4
+Date: 24 September 2026
+Description Qty Unit Price Amount
+Brake cables 1 100.00 100.00
+Pedal arms 1 30.00 30.00
+Workshop labor 3 5.00 15.00
+Subtotal 145.00
+--- Page 2 ---
+Description Qty Unit Price Amount
+Cable clips 2 2.50 5.00
+Subtotal 150.00
+Tax 9.38
+Total USD 159.38
+  `);
+
+  assert.deepEqual(
+    parsed.items.map((item) => [item.name, item.quantity, item.rate, item.amount]),
+    [
+      ["Brake cables", 1, 100, 100],
+      ["Pedal arms", 1, 30, 30],
+      ["Workshop labor", 3, 5, 15],
+      ["Cable clips", 2, 2.5, 5],
+    ],
+  );
+  assert.equal(parsed.subtotal, 150);
+  assert.equal(parsed.tax, 9.38);
+  assert.equal(parsed.total, 159.38);
+});
+
 test("an unreadable row cannot merge into the next complete item or numeric footer", () => {
   const parsed = parseInvoiceText(`
 Invoice No: SAFE-ROWS-1

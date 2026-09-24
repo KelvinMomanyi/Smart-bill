@@ -794,6 +794,7 @@ function standaloneMoney(line: string) {
 }
 
 function extractColumnMajorItems(lines: string[]) {
+  const extracted: ParsedInvoiceItemWithSource[] = [];
   for (
     let descriptionIndex = 0;
     descriptionIndex < lines.length;
@@ -863,10 +864,13 @@ function extractColumnMajorItems(lines: string[]) {
         amounts[index],
       ),
     );
-    if (items.every((item): item is ParsedInvoiceItemWithSource => Boolean(item)))
-      return items;
+    if (items.every((item): item is ParsedInvoiceItemWithSource => Boolean(item))) {
+      extracted.push(...items);
+      if (endIndex < 0) break;
+      descriptionIndex = endIndex;
+    }
   }
-  return [];
+  return extracted;
 }
 
 function canBufferItemLine(line: string, pending: string[]) {
@@ -892,7 +896,6 @@ function extractItems(lines: string[]) {
   let pending: string[] = [];
 
   for (const line of lines) {
-    if (itemsSectionEnded) continue;
     const header = itemHeaderHints(line);
     if (header) {
       inItemsSection = true;
@@ -906,6 +909,10 @@ function extractItems(lines: string[]) {
       };
       continue;
     }
+    // Multi-page invoices commonly print a page subtotal before repeating the
+    // item header on the next page. Ignore footer text after a subtotal, but
+    // allow that repeated header to reopen the item section above.
+    if (itemsSectionEnded) continue;
 
     if (inItemsSection && isItemSummaryLine(line)) {
       if (pending.length) {
@@ -1297,10 +1304,13 @@ export function parseInvoiceText(text: string, dateOrder: "DMY" | "MDY" = "DMY")
     findValue(lines, [/(?:due\s+date|payment\s+due)\s*:?\s*(.+)$/i]), dateOrder,
   );
   const date = findInvoiceDate(lines, dateOrder);
-  const subtotalSource = findMoneyByLabel(lines, /(?:subtotal|sub-total)\b/i);
+  const subtotalSource = findMoneyByLabel(lines, /(?:subtotal|sub-total)\b/i, {
+    reverse: true,
+  });
   const taxLabel = /\b(?:tax|vat|gst)\b/i;
   const taxSource = findMoneyByLabel(lines, taxLabel, {
     excludePercentages: true,
+    reverse: true,
   });
   const taxRate = findPercentageByLabel(lines, taxLabel);
   const totalSource = findMoneyByLabel(
