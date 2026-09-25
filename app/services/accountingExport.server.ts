@@ -16,6 +16,7 @@ import {
 } from "../utils/quickbook";
 import {
   createXeroBill,
+  createXeroPurchaseTaxRate,
   findXeroBills,
   getOrCreateXeroContact,
   xeroRequest,
@@ -26,6 +27,8 @@ import {
 } from "../utils/accountingFormat";
 import {
   automaticXeroBillMapping,
+  detectedInvoiceTaxRate,
+  suggestedXeroPurchaseTax,
   validateBillMapping,
   type BillMapping,
 } from "../utils/accountingValidation";
@@ -149,6 +152,72 @@ export async function exportInvoiceToAccounting(
     invoiceId,
     platform,
   });
+}
+export async function createInvoiceXeroPurchaseTax(
+  request: Request,
+  invoiceId: string,
+) {
+  const { session, actor } = await authorizeAccounting(request);
+  const invoice = await getInvoice(session.shop, invoiceId);
+  const connection = await getAccountingConnection(session.shop, "XERO");
+  const scopes = new Set(String(connection.scopes || "").split(/\s+/));
+  if (!scopes.has("accounting.settings"))
+    throw new Error(
+      "Reconnect Xero in Settings to grant permission to create tax rates, then try again.",
+    );
+  const catalog = await fetchAccountingCatalog(connection);
+  if (["AU", "NZ", "GB", "UK"].includes(catalog.country.toUpperCase()))
+    throw new Error(
+      "This Xero region requires its statutory purchase tax rates. Choose an existing Xero rate instead of creating one from the invoice.",
+    );
+  const rate = detectedInvoiceTaxRate(invoice);
+  if (!(rate && rate > 0 && rate <= 100))
+    throw new Error(
+      "SmartBill could not derive one valid purchase tax percentage from this invoice. Review its net lines and tax total.",
+    );
+  const existing = catalog.taxes.filter(
+    (tax) => tax.supported && Math.abs(tax.rate - rate) < 0.00005,
+  );
+  if (existing.length)
+    throw new Error(
+      existing.length === 1
+        ? existing[0].name + " already exists in Xero. Reload and select it."
+        : "Xero already has multiple " +
+            rate.toFixed(2) +
+            "% purchase rates. Reload and choose the correct reporting rate manually.",
+    );
+  const response = await createXeroPurchaseTaxRate(connection, rate);
+  const created = response.TaxRates?.[0];
+  if (
+    !created?.TaxType ||
+    created.HasValidationErrors ||
+    created.ValidationErrors?.length
+  )
+    throw new Error(
+      created?.ValidationErrors?.map((error: any) => error.Message).join(" ") ||
+        "Xero did not create the purchase tax rate.",
+    );
+  const refreshed = await fetchAccountingCatalog(connection);
+  const matched = suggestedXeroPurchaseTax(invoice, refreshed);
+  if (!matched)
+    throw new Error(
+      "Xero created the rate, but it could not be matched uniquely. Reload Accounting details and choose the new rate manually.",
+    );
+  await prisma.auditEvent.create({
+    data: {
+      shop: session.shop,
+      invoiceId,
+      actor,
+      action: "XERO_TAX_RATE_CREATED",
+      detail: {
+        taxType: matched.id,
+        name: matched.name,
+        rate: matched.rate,
+        companyKey: refreshed.companyKey,
+      },
+    },
+  });
+  return matched;
 }
 // Internal entry point: callers must authorize the shop and subscription first.
 export async function exportApprovedInvoice({

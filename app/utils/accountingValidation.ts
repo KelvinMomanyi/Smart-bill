@@ -42,6 +42,39 @@ export function isUsCompany(country: string) {
     country.toUpperCase(),
   );
 }
+export function detectedInvoiceTaxRate(invoice: any) {
+  const documentTax = money(Number(invoice.tax || 0));
+  const amounts = (invoice.items || []).map((item: any) =>
+    money(item.amount ?? item.price * item.quantity),
+  );
+  const net = amounts.reduce(
+    (sum: number, amount: number) => sum + amount,
+    0,
+  );
+  if (!(documentTax > 0) || !(net > 0)) return undefined;
+  const rawRate = (documentTax / net) * 100;
+  for (let decimals = 0; decimals <= 4; decimals += 1) {
+    const factor = 10 ** decimals;
+    const candidate = Math.round(rawRate * factor) / factor;
+    const aggregateTax = money(
+      amounts.reduce(
+        (sum: number, amount: number) =>
+          sum + (amount * candidate) / 100,
+        0,
+      ),
+    );
+    const lineRoundedTax = money(
+      amounts.reduce(
+        (sum: number, amount: number) =>
+          sum + money((amount * candidate) / 100),
+        0,
+      ),
+    );
+    if (aggregateTax === documentTax || lineRoundedTax === documentTax)
+      return candidate;
+  }
+  return Number(rawRate.toFixed(4));
+}
 export function suggestedXeroPurchaseTax(
   invoice: any,
   catalog: AccountingCatalog,

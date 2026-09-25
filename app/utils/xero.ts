@@ -2,7 +2,7 @@ import { accountingRequest } from "./accountingHttp.server";
 
 export type XeroConnection = { accessToken: string; tenantId?: string | null };
 export const XERO_SCOPES =
-  "openid profile email offline_access accounting.invoices accounting.contacts accounting.settings.read accounting.attachments";
+  "openid profile email offline_access accounting.invoices accounting.contacts accounting.settings accounting.attachments";
 function requiredEnv(name: string) {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`Missing required environment variable: ${name}`);
@@ -124,6 +124,30 @@ export function createXeroBill(
     method: "POST",
     headers: { "Idempotency-Key": requestKey },
     body: JSON.stringify({ Invoices: [payload] }),
+  });
+}
+export function createXeroPurchaseTaxRate(
+  connection: XeroConnection,
+  rate: number,
+) {
+  const displayRate = Number(rate.toFixed(4));
+  return xeroRequest(connection, "/TaxRates", {
+    method: "PUT",
+    body: JSON.stringify({
+      TaxRates: [
+        {
+          Name: "SmartBill Purchase " + displayRate + "%",
+          ReportTaxType: "INPUT",
+          TaxComponents: [
+            {
+              Name: "Purchase tax",
+              Rate: displayRate,
+              IsCompound: false,
+            },
+          ],
+        },
+      ],
+    }),
   });
 }
 export async function findXeroBills(

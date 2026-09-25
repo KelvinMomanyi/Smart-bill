@@ -14,8 +14,12 @@ import prisma from "../db.server";
 import { requireAdmin } from "../utils/rbac.server";
 import { getAccountingCatalog } from "../services/accountingCatalog.server";
 import { livePlatform } from "../services/accountingConnection.server";
-import { saveInvoiceAccountingMapping } from "../services/accountingExport.server";
 import {
+  createInvoiceXeroPurchaseTax,
+  saveInvoiceAccountingMapping,
+} from "../services/accountingExport.server";
+import {
+  detectedInvoiceTaxRate,
   isUsCompany,
   suggestedXeroPurchaseTax,
   type BillMapping,
@@ -54,6 +58,20 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
 export async function action({ request, params }: ActionFunctionArgs) {
   try {
     const form = await request.formData();
+    if (form.get("intent") === "create-xero-tax") {
+      const tax = await createInvoiceXeroPurchaseTax(
+        request,
+        params.id || "",
+      );
+      return json({
+        success: true as const,
+        message:
+          tax.name +
+          " (" +
+          tax.rate.toFixed(2) +
+          "%) was created in Xero and is now selected.",
+      });
+    }
     await saveInvoiceAccountingMapping(
       request,
       params.id || "",
@@ -107,6 +125,13 @@ export default function InvoiceAccountingDetails() {
   );
   const invoiceEffectiveTaxRate =
     invoiceNet > 0 ? (Number(invoice.tax || 0) / invoiceNet) * 100 : 0;
+  const detectedTaxRate = detectedInvoiceTaxRate(invoice);
+  const canCreateXeroTax =
+    xeroNeedsTaxSetup &&
+    detectedTaxRate != null &&
+    !["AU", "NZ", "GB", "UK"].includes(
+      String(catalog?.country || "").toUpperCase(),
+    );
   return (
     <Page
       title={`${platform} accounting details`}
@@ -124,8 +149,37 @@ export default function InvoiceAccountingDetails() {
           </Banner>
         )}
         {catalog && (
-          <Card>
+          <>
+            {xeroNeedsTaxSetup && (
+              <Card>
+                <Form method="post">
+                  <input
+                    type="hidden"
+                    name="intent"
+                    value="create-xero-tax"
+                  />
+                  <input type="hidden" name="platform" value="XERO" />
+                  <BlockStack gap="300">
+                    <Banner tone="warning">
+                      SmartBill detected a{" "}
+                      {(detectedTaxRate ?? invoiceEffectiveTaxRate).toFixed(2)}
+                      % purchase tax rate, but Xero has no unique matching
+                      purchase TaxType for this invoice.
+                    </Banner>
+                    {canCreateXeroTax && (
+                      <Button submit loading={busy} disabled={locked}>
+                        Create{" "}
+                        {(detectedTaxRate ?? invoiceEffectiveTaxRate).toFixed(2)}
+                        % purchase tax in Xero
+                      </Button>
+                    )}
+                  </BlockStack>
+                </Form>
+              </Card>
+            )}
+            <Card>
             <Form method="post">
+              <input type="hidden" name="intent" value="save" />
               <input type="hidden" name="platform" value={platform} />
               <input type="hidden" name="revision" value={invoice.revision} />
               <BlockStack gap="400">
@@ -146,16 +200,6 @@ export default function InvoiceAccountingDetails() {
                   Tax codes must reproduce the approved invoice&apos;s tax
                   total.
                 </Text>
-                {xeroNeedsTaxSetup && (
-                  <Banner tone="warning">
-                    SmartBill detected an invoice-level effective tax rate of{" "}
-                    {invoiceEffectiveTaxRate.toFixed(2)}%, but Xero did not
-                    return one unique purchase tax rate that reproduces{" "}
-                    {Number(invoice.tax || 0).toFixed(2)} tax on{" "}
-                    {invoiceNet.toFixed(2)} net. Create or review the matching
-                    purchase rate in Xero, then reload this page.
-                  </Banner>
-                )}
                 {suggestedXeroTax && Number(invoice.tax || 0) > 0 && (
                   <Banner tone="info">
                     SmartBill matched the invoice tax to{" "}
@@ -260,7 +304,8 @@ export default function InvoiceAccountingDetails() {
                 </Button>
               </BlockStack>
             </Form>
-          </Card>
+            </Card>
+          </>
         )}
       </BlockStack>
     </Page>

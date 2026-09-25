@@ -28,6 +28,7 @@ import {
   assertXeroAuthorizationConfigured,
   getXeroAuthUrl,
   createXeroBill,
+  createXeroPurchaseTaxRate,
   getXeroToken,
   getXeroConnections,
   disconnectXero,
@@ -36,6 +37,7 @@ import {
 import { formatForPlatform } from "../utils/accountingFormat";
 import {
   automaticXeroBillMapping,
+  detectedInvoiceTaxRate,
   validateBillMapping,
   purchaseTaxComponents,
   suggestedXeroPurchaseTax,
@@ -330,6 +332,8 @@ test("SmartBill dynamically matches invoice tax rates to existing Xero purchase 
       { id: "a", name: "A", quantity: 1, price: 3010, amount: 3010 },
     ],
   };
+  assert.equal(detectedInvoiceTaxRate(sixTwentyFiveInvoice), 6.25);
+  assert.equal(detectedInvoiceTaxRate(tenPercentInvoice), 10);
   assert.equal(
     suggestedXeroPurchaseTax(sixTwentyFiveInvoice, dynamicCatalog)?.id,
     "TAX625",
@@ -650,7 +654,10 @@ test("authorization URLs use current scopes and preserve the registered callback
   );
   assert.ok(xero.searchParams.get("scope")?.includes("accounting.invoices"));
   assert.ok(
-    xero.searchParams.get("scope")?.includes("accounting.settings.read"),
+    xero.searchParams.get("scope")?.includes("accounting.settings"),
+  );
+  assert.ok(
+    !xero.searchParams.get("scope")?.includes("accounting.settings.read"),
   );
   assert.ok(xero.searchParams.get("scope")?.includes("offline_access"));
   assert.ok(
@@ -744,7 +751,11 @@ test("actual provider adapters serialize one bill and a stable idempotency key",
   const requests: { url: URL; init: RequestInit }[] = [];
   fakeFetch(t, (url, init) => {
     requests.push({ url, init });
-    return json({ Bill: { Id: "bill" }, Invoices: [{ InvoiceID: "invoice" }] });
+    return json({
+      Bill: { Id: "bill" },
+      Invoices: [{ InvoiceID: "invoice" }],
+      TaxRates: [{ TaxType: "TAX001" }],
+    });
   });
   const payload = { DocNumber: "INV-1", Line: [] };
   await createQuickBooksBill(
@@ -757,6 +768,10 @@ test("actual provider adapters serialize one bill and a stable idempotency key",
     { Type: "ACCPAY" },
     "stable-key",
   );
+  await createXeroPurchaseTaxRate(
+    { accessToken: "test-token", tenantId: "tenant" },
+    10,
+  );
   assert.equal(requests[0].url.searchParams.get("requestid"), "stable-key");
   assert.deepEqual(JSON.parse(String(requests[0].init.body)), payload);
   assert.equal(
@@ -768,6 +783,19 @@ test("actual provider adapters serialize one bill and a stable idempotency key",
     "tenant",
   );
   assert.equal(JSON.parse(String(requests[1].init.body)).Invoices.length, 1);
+  assert.equal(requests[2].url.pathname, "/api.xro/2.0/TaxRates");
+  assert.equal(requests[2].init.method, "PUT");
+  assert.deepEqual(JSON.parse(String(requests[2].init.body)), {
+    TaxRates: [
+      {
+        Name: "SmartBill Purchase 10%",
+        ReportTaxType: "INPUT",
+        TaxComponents: [
+          { Name: "Purchase tax", Rate: 10, IsCompound: false },
+        ],
+      },
+    ],
+  });
 });
 test("HTTP errors distinguish provider rejection from unknown outcomes", async (t) => {
   let status = 400;
