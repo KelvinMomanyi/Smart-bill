@@ -137,7 +137,8 @@ export function createXeroPurchaseTaxRate(
       TaxRates: [
         {
           Name: "SmartBill Purchase " + displayRate + "%",
-          ReportTaxType: "INPUT",
+          // ReportTaxType is edition-specific. Global Xero organisations reject
+          // INPUT here and infer the valid type for a custom rate when omitted.
           TaxComponents: [
             {
               Name: "Purchase tax",

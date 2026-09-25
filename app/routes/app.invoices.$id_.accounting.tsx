@@ -22,6 +22,7 @@ import {
   detectedInvoiceTaxRate,
   isUsCompany,
   suggestedXeroPurchaseTax,
+  xeroRequiresExistingPurchaseTax,
   type BillMapping,
 } from "../utils/accountingValidation";
 export async function loader({ request, params }: LoaderFunctionArgs) {
@@ -129,9 +130,8 @@ export default function InvoiceAccountingDetails() {
   const canCreateXeroTax =
     xeroNeedsTaxSetup &&
     detectedTaxRate != null &&
-    !["AU", "NZ", "GB", "UK"].includes(
-      String(catalog?.country || "").toUpperCase(),
-    );
+    catalog != null &&
+    !xeroRequiresExistingPurchaseTax(catalog);
   return (
     <Page
       title={`${platform} accounting details`}

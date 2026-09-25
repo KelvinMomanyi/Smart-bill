@@ -25,6 +25,7 @@ export async function fetchAccountingCatalog(
       companyKey: accountingCompanyKey(connection),
       companyName: org.Name,
       country: org.CountryCode || "",
+      xeroOrganisationVersion: org.Version || undefined,
       homeCurrency: org.BaseCurrency,
       multiCurrency: true,
       currencies: (currencies.Currencies || []).map((c: any) => c.Code),

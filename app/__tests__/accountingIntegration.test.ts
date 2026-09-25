@@ -41,6 +41,7 @@ import {
   validateBillMapping,
   purchaseTaxComponents,
   suggestedXeroPurchaseTax,
+  xeroRequiresExistingPurchaseTax,
   type AccountingCatalog,
   type BillMapping,
 } from "../utils/accountingValidation";
@@ -349,6 +350,37 @@ test("SmartBill dynamically matches invoice tax rates to existing Xero purchase 
       dynamicCatalog,
     )?.lines.map((line) => line.taxCodeId),
     ["TAX10"],
+  );
+});
+test("Xero custom tax-rate eligibility prefers the organisation version", () => {
+  const xero = {
+    ...catalog,
+    platform: "XERO" as const,
+    companyKey: "XERO:production:abc",
+  };
+  assert.equal(
+    xeroRequiresExistingPurchaseTax({
+      ...xero,
+      country: "KE",
+      xeroOrganisationVersion: "UK",
+    }),
+    true,
+  );
+  assert.equal(
+    xeroRequiresExistingPurchaseTax({
+      ...xero,
+      country: "GB",
+      xeroOrganisationVersion: "GLOBAL",
+    }),
+    false,
+  );
+  assert.equal(
+    xeroRequiresExistingPurchaseTax({
+      ...xero,
+      country: "GB",
+      xeroOrganisationVersion: undefined,
+    }),
+    true,
   );
 });
 test("Xero tax allocation preserves document-level rounding", () => {
@@ -789,7 +821,6 @@ test("actual provider adapters serialize one bill and a stable idempotency key",
     TaxRates: [
       {
         Name: "SmartBill Purchase 10%",
-        ReportTaxType: "INPUT",
         TaxComponents: [
           { Name: "Purchase tax", Rate: 10, IsCompound: false },
         ],
@@ -945,7 +976,12 @@ test("Xero catalogs filter inactive accounts and sales-only tax codes", async (t
           : url.pathname.endsWith("/Organisation")
             ? {
                 Organisations: [
-                  { Name: "Test", BaseCurrency: "GBP", CountryCode: "GB" },
+                  {
+                    Name: "Test",
+                    BaseCurrency: "GBP",
+                    CountryCode: "GB",
+                    Version: "UK",
+                  },
                 ],
               }
             : { Currencies: [{ Code: "GBP" }] },
@@ -965,4 +1001,5 @@ test("Xero catalogs filter inactive accounts and sales-only tax codes", async (t
     result.taxes.map((a) => a.id),
     ["INPUT"],
   );
+  assert.equal(result.xeroOrganisationVersion, "UK");
 });

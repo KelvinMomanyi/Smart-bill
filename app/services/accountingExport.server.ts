@@ -30,6 +30,7 @@ import {
   detectedInvoiceTaxRate,
   suggestedXeroPurchaseTax,
   validateBillMapping,
+  xeroRequiresExistingPurchaseTax,
   type BillMapping,
 } from "../utils/accountingValidation";
 import { AccountingApiError } from "../utils/accountingHttp.server";
@@ -166,7 +167,7 @@ export async function createInvoiceXeroPurchaseTax(
       "Reconnect Xero in Settings to grant permission to create tax rates, then try again.",
     );
   const catalog = await fetchAccountingCatalog(connection);
-  if (["AU", "NZ", "GB", "UK"].includes(catalog.country.toUpperCase()))
+  if (xeroRequiresExistingPurchaseTax(catalog))
     throw new Error(
       "This Xero region requires its statutory purchase tax rates. Choose an existing Xero rate instead of creating one from the invoice.",
     );

@@ -3,6 +3,7 @@ export type AccountingCatalog = {
   companyKey: string;
   companyName: string;
   country: string;
+  xeroOrganisationVersion?: string;
   homeCurrency: string;
   multiCurrency: boolean;
   currencies: string[];
@@ -41,6 +42,12 @@ export function isUsCompany(country: string) {
   return ["US", "USA", "UNITED STATES", "UNITED STATES OF AMERICA"].includes(
     country.toUpperCase(),
   );
+}
+export function xeroRequiresExistingPurchaseTax(catalog: AccountingCatalog) {
+  if (catalog.platform !== "XERO") return false;
+  const version = String(catalog.xeroOrganisationVersion || "").toUpperCase();
+  if (version) return /^(?:AU|NZ|UK)(?:ONRAMP)?$/.test(version);
+  return ["AU", "NZ", "GB", "UK"].includes(catalog.country.toUpperCase());
 }
 export function detectedInvoiceTaxRate(invoice: any) {
   const documentTax = money(Number(invoice.tax || 0));
