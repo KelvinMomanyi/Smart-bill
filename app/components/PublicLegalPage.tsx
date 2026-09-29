@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 
 import type { PublicLegalDetails } from "../utils/legal.server";
 import styles from "../styles/legal.module.css";
+import { IntuitTrademarkNotice } from "./IntuitTrademarkNotice";
 
 type PublicLegalPageProps = {
   children: ReactNode;
@@ -73,6 +74,7 @@ export function PublicLegalPage({
           &copy; {new Date().getUTCFullYear()} {details.operatorName}
         </span>
         <span>Supplier invoice control for Shopify merchants</span>
+        <IntuitTrademarkNotice className={styles.trademarkNotice} />
       </footer>
     </div>
   );

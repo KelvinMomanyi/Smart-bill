@@ -64,16 +64,32 @@
 
 .footer {
   display: flex;
+  align-items: center;
+  flex-direction: column;
   justify-content: center;
-  gap: 1.5rem;
+  gap: 1rem;
   padding: 1rem 0;
   border-top: 1px solid #d8dfd8;
   font-size: 0.9rem;
 }
 
-.footer a {
+.footerLinks {
+  display: flex;
+  justify-content: center;
+  gap: 1.5rem;
+}
+
+.footerLinks a {
   color: #17653e;
   font-weight: 650;
+}
+
+.trademarkNotice {
+  max-width: 46rem;
+  margin: 0;
+  color: #616b64;
+  font-size: 0.78rem;
+  line-height: 1.5;
 }
 
 @media only screen and (max-width: 50rem) {
@@ -87,6 +103,10 @@
 
   .footer {
     align-items: center;
+    gap: 0.75rem;
+  }
+
+  .footerLinks {
     flex-direction: column;
     gap: 0.75rem;
   }

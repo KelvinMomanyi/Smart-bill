@@ -6,6 +6,7 @@ import { NavMenu } from "@shopify/app-bridge-react";
 import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
 import formStyles from "../styles/forms.css?url";
 
+import { IntuitTrademarkNotice } from "../components/IntuitTrademarkNotice";
 import { authenticate } from "../shopify.server";
 import { getUserRole } from "../utils/rbac.server";
 
@@ -49,6 +50,7 @@ export default function App() {
       <main className="smartbill-workspace">
         <Outlet />
       </main>
+      <IntuitTrademarkNotice className="smartbill-trademark-notice" />
     </AppProvider>
   );
 }

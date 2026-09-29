@@ -2,6 +2,7 @@ import type { LoaderFunctionArgs } from "@remix-run/node";
 import { redirect } from "@remix-run/node";
 import { Form, Link, useLoaderData } from "@remix-run/react";
 
+import { IntuitTrademarkNotice } from "../../components/IntuitTrademarkNotice";
 import { login } from "../../shopify.server";
 import { PLANS, TRIAL_DAYS } from "../../utils/plans";
 
@@ -71,8 +72,11 @@ export default function App() {
           allowances reset each calendar month, UTC.
         </p>
         <footer className={styles.footer}>
-          <Link to="/terms">End-User Licence Agreement</Link>
-          <Link to="/privacy">Privacy Policy</Link>
+          <div className={styles.footerLinks}>
+            <Link to="/terms">End-User Licence Agreement</Link>
+            <Link to="/privacy">Privacy Policy</Link>
+          </div>
+          <IntuitTrademarkNotice className={styles.trademarkNotice} />
         </footer>
       </div>
     </div>

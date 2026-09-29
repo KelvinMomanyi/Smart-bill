@@ -9,6 +9,7 @@ import {
   useLoaderData,
   useNavigation,
 } from "@remix-run/react";
+import { IntuitTrademarkNotice } from "../components/IntuitTrademarkNotice";
 import {
   accountingReturnUrl,
   authorizedBrowser,
@@ -111,6 +112,18 @@ export default function ConfirmAccounting() {
       <p>
         <a href={data.returnUrl}>Return to SmartBill</a>
       </p>
+      {data.platform === "QUICKBOOKS" && (
+        <IntuitTrademarkNotice
+          style={{
+            borderTop: "1px solid #d8dfd8",
+            color: "#616b64",
+            fontSize: 12,
+            lineHeight: 1.5,
+            marginTop: 32,
+            paddingTop: 16,
+          }}
+        />
+      )}
     </main>
   );
 }

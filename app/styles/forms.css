@@ -45,3 +45,14 @@
   cursor: pointer;
   padding-block: 8px;
 }
+
+.smartbill-trademark-notice {
+  max-width: 960px;
+  margin: 24px auto 0;
+  padding: 16px 24px 24px;
+  border-top: 1px solid #d8dfd8;
+  color: #616b64;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}

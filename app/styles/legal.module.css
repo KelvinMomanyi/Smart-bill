@@ -218,10 +218,17 @@
 }
 
 .footer {
+  flex-wrap: wrap;
   padding: 1.6rem 0 2.5rem;
   border-top: 1px solid #d8dfd8;
   color: #6a756d;
   font-size: 0.8rem;
+}
+
+.trademarkNotice {
+  flex-basis: 100%;
+  margin: 0;
+  line-height: 1.5;
 }
 
 @media (max-width: 42rem) {
