@@ -1,6 +1,6 @@
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { redirect } from "@remix-run/node";
-import { Form, useLoaderData } from "@remix-run/react";
+import { Form, Link, useLoaderData } from "@remix-run/react";
 
 import { login } from "../../shopify.server";
 import { PLANS, TRIAL_DAYS } from "../../utils/plans";
@@ -70,6 +70,10 @@ export default function App() {
           {TRIAL_DAYS}-day trial. No automatic overage charges. Invoice
           allowances reset each calendar month, UTC.
         </p>
+        <footer className={styles.footer}>
+          <Link to="/terms">End-User Licence Agreement</Link>
+          <Link to="/privacy">Privacy Policy</Link>
+        </footer>
       </div>
     </div>
   );

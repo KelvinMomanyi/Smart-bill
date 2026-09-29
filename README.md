@@ -153,6 +153,7 @@ The store still has one Shopify base currency. FX revaluation is calculated and 
 
 ## Before publication
 
+- Public legal pages are available at `/terms` and `/privacy`. Configure `LEGAL_OPERATOR_NAME`, `PUBLIC_SUPPORT_EMAIL`, `LEGAL_POSTAL_ADDRESS`, `LEGAL_GOVERNING_LAW` and `LEGAL_EFFECTIVE_DATE` in the production environment, redeploy, and verify both pages in a signed-out browser before supplying their HTTPS URLs to Shopify, Intuit or another marketplace. Have the final language reviewed for the operator's actual jurisdiction and business practices.
 - Apply the migration and test install/login with both the owner and a separate staff account. `SHOPIFY_BILLING_TEST=true` temporarily treats authenticated installed stores as Growth subscribers so all paid features can be acceptance-tested without a charge. Set it to `false` and redeploy before publishing so Shopify subscription checks are enforced.
 - Upload real supplier samples, correct extraction, record partial deliveries, approve, preview costs, sync and restore on test products. Test usage exhaustion and duplicate capture.
 - Exercise accounting export and interrupted-response verification against test organisations, including tax and currency mismatch cases.
