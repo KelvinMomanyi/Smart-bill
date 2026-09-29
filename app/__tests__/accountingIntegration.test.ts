@@ -594,6 +594,40 @@ test("bill verification rejects mismatched currency, tax, date, supplier, and vo
     false,
   );
 });
+test("QuickBooks verification accepts its default NON code on US purchase lines", () => {
+  const us = { ...catalog, country: "US", homeCurrency: "USD", taxes: [] };
+  const invoiceInUsd = { ...invoice, currency: "USD" };
+  const validated = validateBillMapping(
+    invoiceInUsd,
+    { ...settings, quickBooksTaxAccountId: "10" },
+    us,
+    mapping,
+  );
+  const expected = formatForPlatform(invoiceInUsd, "QUICKBOOKS", {
+    validated,
+    quickBooksVendorRef: { value: "4" },
+    quickBooksMultiCurrency: false,
+  });
+  const remote = {
+    ...structuredClone(expected),
+    Id: "146",
+    CurrencyRef: { value: "USD" },
+    TotalAmt: 170,
+  };
+  for (const line of remote.Line)
+    line.AccountBasedExpenseLineDetail.TaxCodeRef = { value: "NON" };
+
+  assert.equal(
+    billMatchesInvoice("QUICKBOOKS", remote, invoiceInUsd, expected, "USD"),
+    true,
+  );
+
+  remote.Line[0].AccountBasedExpenseLineDetail.TaxCodeRef = { value: "TAX" };
+  assert.equal(
+    billMatchesInvoice("QUICKBOOKS", remote, invoiceInUsd, expected, "USD"),
+    false,
+  );
+});
 test("verification checks posted accounts and exchange rates even when the bill total matches", () => {
   const validated = validateBillMapping(invoice, settings, catalog, mapping);
   const expected = formatForPlatform(invoice, "QUICKBOOKS", {

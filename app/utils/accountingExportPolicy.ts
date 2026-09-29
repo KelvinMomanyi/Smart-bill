@@ -98,6 +98,15 @@ function samePostingLines(
   const received = platform === "XERO" ? bill.LineItems : bill.Line;
   if (!Array.isArray(wanted)) return true; // Legacy payloads can lack line detail.
   if (!Array.isArray(received)) return false;
+  function taxKey(value: unknown) {
+    const tax = String(value ?? "").trim();
+    // US QuickBooks bills can omit TaxCodeRef on create, then return the same
+    // non-taxable line with the provider's built-in NON code. They are the
+    // same posting; every other returned tax code must still match exactly.
+    return platform === "QUICKBOOKS" && (!tax || tax.toUpperCase() === "NON")
+      ? ""
+      : tax;
+  }
   function postings(lines: any[]) {
     const groups = new Map<string, { net: number; tax: number }>();
     for (const line of lines) {
@@ -113,7 +122,7 @@ function samePostingLines(
       const tax =
         platform === "XERO"
           ? line.TaxType
-          : line.AccountBasedExpenseLineDetail?.TaxCodeRef?.value || "";
+          : taxKey(line.AccountBasedExpenseLineDetail?.TaxCodeRef?.value);
       const amount = Number(
         platform === "XERO" ? line.LineAmount : line.Amount,
       );
