@@ -10,6 +10,7 @@ import {
   useNavigation,
 } from "@remix-run/react";
 import { IntuitTrademarkNotice } from "../components/IntuitTrademarkNotice";
+import { SmartBillBrand } from "../components/SmartBillBrand";
 import {
   accountingReturnUrl,
   authorizedBrowser,
@@ -72,6 +73,7 @@ export default function ConfirmAccounting() {
         fontFamily: "system-ui",
       }}
     >
+      <SmartBillBrand size={48} />
       <h1>
         Confirm your{" "}
         {data.platform === "XERO" ? "Xero organisation" : "QuickBooks company"}

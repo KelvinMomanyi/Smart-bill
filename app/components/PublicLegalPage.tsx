@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import type { PublicLegalDetails } from "../utils/legal.server";
 import styles from "../styles/legal.module.css";
 import { IntuitTrademarkNotice } from "./IntuitTrademarkNotice";
+import { SmartBillBrand } from "./SmartBillBrand";
 
 type PublicLegalPageProps = {
   children: ReactNode;
@@ -24,10 +25,7 @@ export function PublicLegalPage({
     <div className={styles.page}>
       <header className={styles.siteHeader}>
         <Link className={styles.brand} to="/" aria-label="SmartBill home">
-          <span className={styles.brandMark} aria-hidden="true">
-            S
-          </span>
-          <span>SmartBill</span>
+          <SmartBillBrand />
         </Link>
         <nav className={styles.navigation} aria-label="Legal pages">
           <Link to="/terms">Terms</Link>

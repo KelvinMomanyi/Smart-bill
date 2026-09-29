@@ -7,6 +7,7 @@ import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
 import formStyles from "../styles/forms.css?url";
 
 import { IntuitTrademarkNotice } from "../components/IntuitTrademarkNotice";
+import { SmartBillBrand } from "../components/SmartBillBrand";
 import { authenticate } from "../shopify.server";
 import { getUserRole } from "../utils/rbac.server";
 
@@ -47,6 +48,11 @@ export default function App() {
           </>
         )}
       </NavMenu>
+      <header className="smartbill-app-brand">
+        <Link to="/app" aria-label="SmartBill home">
+          <SmartBillBrand size={32} />
+        </Link>
+      </header>
       <main className="smartbill-workspace">
         <Outlet />
       </main>

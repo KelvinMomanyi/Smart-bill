@@ -1,3 +1,14 @@
+.smartbill-app-brand {
+  max-width: 998px;
+  margin: 0 auto;
+  padding: 16px 20px 0;
+}
+
+.smartbill-app-brand a {
+  display: inline-flex;
+  text-decoration: none;
+}
+
 .smartbill-workspace label {
   display: flex;
   flex-wrap: wrap;

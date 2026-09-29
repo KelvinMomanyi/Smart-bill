@@ -1,4 +1,5 @@
 import prisma from "../db.server";
+import { SMARTBILL_ICON_PATH } from "../utils/branding";
 import {
   notificationMessage,
   notificationTypeEnabled,
@@ -33,7 +34,11 @@ async function sendEmail(target: string, subject: string, text: string, url: str
   const from = process.env.NOTIFICATION_FROM_EMAIL;
   if (!apiKey || !from)
     throw new Error("Email notifications are not configured by the app operator.");
-  const html = `<p>${escapeHtml(text)}</p>${
+  const iconUrl = appUrl(SMARTBILL_ICON_PATH);
+  const brand = iconUrl
+    ? `<p><img src="${escapeHtml(iconUrl)}" width="48" height="48" alt="SmartBill" style="display:block;border-radius:10px" /></p>`
+    : "";
+  const html = `${brand}<p>${escapeHtml(text)}</p>${
     url ? `<p><a href="${escapeHtml(url)}">Review in SmartBill</a></p>` : ""
   }`;
   const response = await fetch("https://api.sendgrid.com/v3/mail/send", {

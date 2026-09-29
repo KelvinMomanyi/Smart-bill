@@ -14,6 +14,7 @@ import polarisTranslations from "@shopify/polaris/locales/en.json";
 import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
 
 import { login } from "../../shopify.server";
+import { SmartBillBrand } from "../../components/SmartBillBrand";
 
 import { loginErrorMessage } from "./error.server";
 
@@ -45,6 +46,7 @@ export default function Auth() {
         <Card>
           <Form method="post">
             <FormLayout>
+              <SmartBillBrand size={48} />
               <Text variant="headingMd" as="h2">
                 Log in
               </Text>

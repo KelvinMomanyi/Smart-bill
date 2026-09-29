@@ -3,6 +3,7 @@ import { redirect } from "@remix-run/node";
 import { Form, Link, useLoaderData } from "@remix-run/react";
 
 import { IntuitTrademarkNotice } from "../../components/IntuitTrademarkNotice";
+import { SmartBillBrand } from "../../components/SmartBillBrand";
 import { login } from "../../shopify.server";
 import { PLANS, TRIAL_DAYS } from "../../utils/plans";
 
@@ -24,6 +25,9 @@ export default function App() {
   return (
     <div className={styles.index}>
       <div className={styles.content}>
+        <div>
+          <SmartBillBrand size={80} showName={false} />
+        </div>
         <h1 className={styles.heading}>SmartBill supplier invoice control</h1>
         <p className={styles.text}>
           Capture vendor invoices, reconcile purchase orders, update Shopify

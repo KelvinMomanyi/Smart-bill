@@ -2,6 +2,14 @@
 
 SmartBill helps Shopify inventory teams capture supplier invoices, review costs, reconcile purchase orders and prepare accounting bills. This is an unpublished app; external billing, OCR hosting and accounting connections still require deployment configuration and development-store testing.
 
+## App branding
+
+The approved receipt-and-inventory icon is stored at `public/brand/smartbill-icon-1200.png` (1200 × 1200 PNG, under 1 MB). The shared `SmartBillBrand` component uses smaller responsive images on the landing page, terms/privacy headers, login, embedded app, and accounting connection page. Email notifications use the same icon, and the root document supplies browser and Apple touch icons.
+
+To regenerate the smaller assets and favicon from the approved master, run `node scripts/generate-brand-assets.mjs`. No image-generation service is needed for this step.
+
+Deploy the app to publish these changes. Upload `public/brand/smartbill-icon-1200.png` to SmartBill's Shopify app icon/listing settings separately; those dashboard images are not changed by this repository. Use the same file in Intuit's app branding settings if an icon is requested for the accounting connection.
+
 ## Launch pricing
 
 | Plan    | USD every 30 days | Invoices per calendar month |
