@@ -26,3 +26,6 @@ ocr-service-account.json
 # Ignore shopify files created during app dev
 .shopify/*
 .shopify.lock
+
+.vercel
+.env*
