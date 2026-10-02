@@ -124,7 +124,7 @@ node --env-file=.env node_modules/vite-node/vite-node.mjs --config vite.tasks.co
 
 ## Deployment
 
-Set one stable HTTPS `SHOPIFY_APP_URL` and use that URL in `shopify.app.toml`, the Shopify app configuration and OAuth callbacks. The current TOML uses `https://smart-bill-self.vercel.app`. A temporary `trycloudflare.com` development URL only works while its tunnel is active; restarting development can change that URL. Updating source files does not deploy the app or update its remote Shopify configuration.
+Set one stable HTTPS `SHOPIFY_APP_URL` and use that URL in `shopify.app.toml`, the Shopify app configuration and OAuth callbacks. The current TOML uses `https://smart-bill-self-five.vercel.app`. A temporary `trycloudflare.com` development URL only works while its tunnel is active; restarting development can change that URL. Updating source files does not deploy the app or update its remote Shopify configuration.
 
 Vercel uses `npm run build:deploy` from `vercel.json`: it builds the app, applies pending migrations with `prisma migrate deploy`, and verifies migration status before allowing the deployment to finish. Build-time and runtime `DATABASE_URL` must point to the same database. Give Preview deployments their own database through Preview-scoped environment variables.
 

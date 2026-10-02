@@ -31,8 +31,8 @@ Xero uses its current granular `accounting.invoices` scope, plus contacts, read-
 Use a stable HTTPS URL, not a temporary Cloudflare development tunnel. For the currently configured domain, register these exact redirect URIs in the provider developer applications:
 
 ```text
-https://smart-bill-self.vercel.app/accounting/xero/callback
-https://smart-bill-self.vercel.app/accounting/quickbooks/callback
+https://smart-bill-self-five.vercel.app/accounting/xero/callback
+https://smart-bill-self-five.vercel.app/accounting/quickbooks/callback
 ```
 
 Both the initial request and token exchange derive the URI from `SHOPIFY_APP_URL`, preventing reverse-proxy host differences from changing it.
@@ -40,7 +40,7 @@ Both the initial request and token exchange derive the URI from `SHOPIFY_APP_URL
 Required environment variables:
 
 ```text
-SHOPIFY_APP_URL=https://smart-bill-self.vercel.app
+SHOPIFY_APP_URL=https://smart-bill-self-five.vercel.app
 XERO_CLIENT_ID=...
 XERO_CLIENT_SECRET=...
 QB_CLIENT_ID=...
@@ -57,7 +57,7 @@ Developer portal, verify all of the following:
 1. The application uses the **Auth Code** grant type, not a Custom Connection
    or client-credentials-only flow.
 2. Its redirect URI is exactly
-   `https://smart-bill-self.vercel.app/accounting/xero/callback` (same scheme,
+   `https://smart-bill-self-five.vercel.app/accounting/xero/callback` (same scheme,
    host, path, and no trailing slash).
 3. Production `XERO_CLIENT_ID` and `XERO_CLIENT_SECRET` come from that same
    Xero application. Redeploy after changing either value.

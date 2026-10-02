@@ -3,7 +3,7 @@
 client_id = "619efa429740598f93a2ef8f8d711cca"
 name = "SmartBill"
 handle = "smartbill-1"
-application_url = "https://smart-bill-self.vercel.app/"
+application_url = "https://smart-bill-self-five.vercel.app/"
 embedded = true
 
 [build]
@@ -16,9 +16,9 @@ scopes = "read_products,write_inventory,read_inventory"
 
 [auth]
 redirect_urls = [
-  "https://smart-bill-self.vercel.app/auth/callback",
-  "https://smart-bill-self.vercel.app/auth/shopify/callback",
-  "https://smart-bill-self.vercel.app/api/auth/callback"
+  "https://smart-bill-self-five.vercel.app/auth/callback",
+  "https://smart-bill-self-five.vercel.app/auth/shopify/callback",
+  "https://smart-bill-self-five.vercel.app/api/auth/callback"
 ]
 
 [webhooks]
