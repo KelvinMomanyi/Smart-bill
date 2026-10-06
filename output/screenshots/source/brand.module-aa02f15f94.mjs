@@ -1,0 +1,1 @@
+export default {"brand":"listing-aa02f15f94-brand","icon":"listing-aa02f15f94-icon"};

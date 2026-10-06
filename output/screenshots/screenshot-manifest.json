@@ -1,0 +1,43 @@
+[
+  {
+    "filename": "smartbill-desktop-01-invoice-review.png",
+    "alt": "Supplier invoices with review and accounting statuses",
+    "altCharacters": 53,
+    "sourceRoute": "app/routes/app.invoices.tsx",
+    "width": 1600,
+    "height": 900,
+    "type": "desktop",
+    "fictionalData": true
+  },
+  {
+    "filename": "smartbill-desktop-02-purchase-order-receipts.png",
+    "alt": "Compare ordered, received, and billed product quantities",
+    "altCharacters": 56,
+    "sourceRoute": "app/routes/app.receipts.$id.tsx",
+    "width": 1600,
+    "height": 900,
+    "type": "desktop",
+    "fictionalData": true
+  },
+  {
+    "filename": "smartbill-desktop-03-vendor-analytics.png",
+    "alt": "Supplier spending, invoice counts, and purchase order issues",
+    "altCharacters": 60,
+    "sourceRoute": "app/routes/app.analytics.tsx",
+    "width": 1600,
+    "height": 900,
+    "type": "desktop",
+    "fictionalData": true
+  },
+  {
+    "filename": "smartbill-mobile-01-record-delivery.png",
+    "alt": "Record a delivery on mobile with previous receipts visible",
+    "altCharacters": 58,
+    "sourceRoute": "app/routes/app.receipts.$id.tsx",
+    "width": 900,
+    "height": 1600,
+    "type": "mobile",
+    "fictionalData": true,
+    "state": "Delivery quantities entered, not submitted"
+  }
+]

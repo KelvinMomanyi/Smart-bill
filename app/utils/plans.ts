@@ -1,10 +1,10 @@
 export const PLANS = {
   STARTER: {
-    name: "SmartBill Starter", label: "Starter", price: 19, invoiceLimit: 50,
+    name: "SmartBill Starter", label: "Starter", price: 9.99, invoiceLimit: 50,
     description: "50 invoices per calendar month. Review, purchase orders, cost sync, CSV, Xero and QuickBooks.",
   },
   GROWTH: {
-    name: "SmartBill Growth", label: "Growth", price: 49, invoiceLimit: 250,
+    name: "SmartBill Growth", label: "Growth", price: 29.99, invoiceLimit: 250,
     description: "250 invoices per calendar month. Everything in Starter, plus bulk upload and an invoice email inbox.",
   },
 } as const;

@@ -83,7 +83,7 @@ export function assertSubscription(
     );
   if (feature === "bulk" && plan !== "GROWTH")
     throw new Error(
-      "Bulk upload and email capture require Growth ($49 every 30 days).",
+      `Bulk upload and email capture require ${PLANS.GROWTH.label} ($${PLANS.GROWTH.price} USD every 30 days).`,
     );
 }
 export async function requireShopSubscription(

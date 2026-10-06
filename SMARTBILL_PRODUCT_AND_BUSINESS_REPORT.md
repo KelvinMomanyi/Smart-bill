@@ -1,6 +1,8 @@
 # SmartBill: Product, Business Value and Earning Potential
 
 **Prepared:** 9 September 2026  
+**Pricing updated:** 6 October 2026. Prices and related financial examples now use $9.99 Starter and $29.99 Growth; product-readiness findings retain the original assessment date.
+
 **Purpose:** Explain the app, assess its commercial opportunity, and identify the work needed to build a sustainable business.  
 **Currency:** Financial examples use USD unless another currency is explicitly stated.
 
@@ -18,13 +20,13 @@ A retailer may order stock at one price, receive only part of the shipment, and 
 
 The app has a credible niche among smaller inventory businesses that have outgrown spreadsheets but do not need a complete enterprise purchasing system. Its commercial success will depend on accurate extraction, low effort per invoice, dependable integrations, and repeat use.
 
-The current $19 and $49 plans are accessible entry prices, but SmartBill is **not the lowest-priced supplier-invoice app** in the market. Its price must be justified by the combined review, reconciliation, cost-history and accounting workflow. The competitive comparison in Section 7 explains this finding.
+The current $9.99 and $29.99 launch plans lower the initial purchase cost, but SmartBill is **not the lowest-priced supplier-invoice app** in the market. Its price must be justified by the combined review, reconciliation, cost-history and accounting workflow. The competitive comparison in Section 7 explains this finding.
 
-At an assumed average subscription value of $28 per store per 30-day cycle:
+At an assumed average subscription value of $15.99 per store per 30-day cycle:
 
-- 50 paying stores produce $1,400 in gross recurring revenue per cycle.
-- 100 paying stores produce $2,800.
-- 500 paying stores produce $14,000.
+- 50 paying stores produce $799.50 in gross recurring revenue per cycle.
+- 100 paying stores produce $1,599.
+- 500 paying stores produce $7,995.
 
 Those are revenue calculations, not take-home income. Provider fees, computing, support, customer acquisition and development can materially reduce the amount available to the owner.
 
@@ -229,20 +231,20 @@ Assume a merchant saves **five minutes per invoice** and values staff time at **
 
 | Example          | Invoices processed | Time released | Value of that time | Subscription | Time value less subscription |
 | ---------------- | -----------------: | ------------: | -----------------: | -----------: | ---------------------------: |
-| Starter merchant |                 50 |    4.17 hours |             $62.50 |          $19 |                       $43.50 |
-| Growth merchant  |                200 |   16.67 hours |            $250.00 |          $49 |                      $201.00 |
+| Starter merchant |                 50 |    4.17 hours |             $62.50 |        $9.99 |                       $52.51 |
+| Growth merchant  |                200 |   16.67 hours |            $250.00 |       $29.99 |                      $220.01 |
 
-At those assumptions, time value covers the subscription after approximately **16 invoices for Starter** or **40 invoices for Growth**. Actual results depend on document quality, review time and the previous process.
+At those assumptions, time value covers the subscription after approximately **8 invoices for Starter** or **24 invoices for Growth**. Actual results depend on document quality, review time and the previous process.
 
 Released staff time is not necessarily a reduction in wages. It may instead let the same team spend more time on other work.
 
 ## 7. Market context and competing products
 
-Prices below were checked on 9 September 2026. These products have different scopes and volume definitions, so this is a positioning comparison rather than a feature-for-feature ranking.
+Competitor prices below were checked on 9 September 2026; Salor Invoice and Auto Purchase Orders were checked again on 6 October 2026. SmartBill uses the revised launch prices from 6 October. These products have different scopes and volume definitions, so this is a positioning comparison rather than a feature-for-feature ranking.
 
 | Product              | Published entry pricing                                        | Relevant focus                                                                          | Implication for SmartBill                                                    |
 | -------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| SmartBill            | $19 per 30 days for 50 invoices; $49 for 250                   | Invoice review, PO/receipt checks, selected product-cost updates and accounting exports | Must show the benefit of the combined process                                |
+| SmartBill            | $9.99 per 30 days for 50 invoices; $29.99 for 250              | Invoice review, PO/receipt checks, selected product-cost updates and accounting exports | Must show the benefit of the combined process                                |
 | Salor Invoice        | Free allowance; $9/month for 200 invoices; $29/month for 1,000 | Supplier invoice extraction, reviewed cost/quantity updates and saved matches           | Direct price pressure on basic capture and cost updates                      |
 | Auto Purchase Orders | From $39.99/month, including 100 POs on its entry plan         | PO automation, suppliers and inventory receiving                                        | An adjacent, broader purchasing alternative                                  |
 | Inventaly            | From $89/month                                                 | Procurement, invoice extraction, receiving and landed-cost tracking                     | A higher-priced alternative with capabilities SmartBill does not yet provide |
@@ -265,8 +267,8 @@ A defensible advantage would come from reliable handling of real supplier format
 
 | Plan    |      Recurring charge |                       Allowance | Capture differences                          |
 | ------- | --------------------: | ------------------------------: | -------------------------------------------- |
-| Starter | $19 USD every 30 days |  50 invoices per calendar month | Individual document capture and pasted text  |
-| Growth  | $49 USD every 30 days | 250 invoices per calendar month | Adds bulk upload and an optional email inbox |
+| Starter | $9.99 USD every 30 days |  50 invoices per calendar month | Individual document capture and pasted text  |
+| Growth  | $29.99 USD every 30 days | 250 invoices per calendar month | Adds bulk upload and an optional email inbox |
 
 Both plans have a 14-day trial and include the core approval, PO, cost and accounting workflows, subject to integration setup and current feature limitations.
 
@@ -276,11 +278,13 @@ Invoice allowances reset by calendar month in UTC, whereas subscription charges 
 
 ### Recommended pricing approach
 
-Keep the current plans as a launch hypothesis while measuring willingness to pay and support cost. Do not assume the pricing has been validated by the earlier reduction from $99/$249.
+Use $9.99 Starter and $29.99 Growth as launch hypotheses while measuring willingness to pay and support cost. The reduction from $19/$49 is a commercial judgment, not evidence that conversion or retention will improve.
 
 If prospects want only OCR and basic cost updates, cheaper competitors may be a better fit for them. If prospects need invoice approval, PO exceptions and accounting handover, demonstrate that workflow before discussing a price change.
 
-After pilot evidence is available, consider one change at a time: a higher Starter allowance, clearer Growth benefits, a modest annual option, or an explicitly priced advanced feature. No additional prices or packaging changes have been implemented as part of this report.
+At the assumed 70% Starter and 30% Growth mix, average recurring revenue falls from $28 to $15.99. Approximately 75% more paying stores would be needed to retain the same gross revenue. Lower entry pricing therefore needs evidence of improved acquisition or retention and manageable service costs.
+
+After pilot evidence is available, consider one change at a time: a higher Starter allowance, clearer Growth benefits, a modest annual option, or an explicitly priced advanced feature. Invoice allowances, included features and the 14-day trial remain as configured before this price change.
 
 ## 9. Subscription earning potential
 
@@ -290,31 +294,31 @@ No verified paying-customer count, subscription income, conversion history or ac
 
 Assume:
 
-- 70% of paying stores choose Starter at $19.
-- 30% choose Growth at $49.
+- 70% of paying stores choose Starter at $9.99.
+- 30% choose Growth at $29.99.
 - All listed stores are paying and remain subscribed for the period.
 - There are no discounts, refunds, failed collections or free trials in the figures.
 
 Average recurring revenue per store is:
 
-**(70% × $19) + (30% × $49) = $28 per 30-day billing cycle.**
+**(70% × $9.99) + (30% × $29.99) = $15.99 per 30-day billing cycle.**
 
 | Paying stores | Starter / Growth | Gross revenue per 30-day cycle | Gross revenue over 12 such cycles |
 | ------------- | ---------------: | -----------------------------: | --------------------------------: |
-| 10            |            7 / 3 |                           $280 |                            $3,360 |
-| 50            |          35 / 15 |                         $1,400 |                           $16,800 |
-| 100           |          70 / 30 |                         $2,800 |                           $33,600 |
-| 250           |         175 / 75 |                         $7,000 |                           $84,000 |
-| 500           |        350 / 150 |                        $14,000 |                          $168,000 |
-| 1,000         |        700 / 300 |                        $28,000 |                          $336,000 |
+| 10            |            7 / 3 |                        $159.90 |                         $1,918.80 |
+| 50            |          35 / 15 |                        $799.50 |                            $9,594 |
+| 100           |          70 / 30 |                         $1,599 |                           $19,188 |
+| 250           |         175 / 75 |                      $3,997.50 |                           $47,970 |
+| 500           |        350 / 150 |                         $7,995 |                           $95,940 |
+| 1,000         |        700 / 300 |                        $15,990 |                          $191,880 |
 
 Twelve 30-day cycles cover 360 days. The last column is a constant-customer run-rate illustration, not a calendar-year cash forecast.
 
-At the same assumed plan mix, gross recurring revenue targets of $1,000, $5,000 and $10,000 per cycle require approximately **36, 179 and 358 paying stores**, respectively.
+At the same assumed plan mix, gross recurring revenue targets of $1,000, $5,000 and $10,000 per cycle require approximately **63, 313 and 626 paying stores**, respectively.
 
 ### The customer mix matters
 
-At 100 paying stores, an all-Starter business generates $1,900 per cycle, while an all-Growth business generates $4,900. Higher-priced customers may also use more processing and support, so higher revenue does not automatically mean a higher margin.
+At 100 paying stores, an all-Starter business generates $999 per cycle, while an all-Growth business generates $2,999. Higher-priced customers may also use more processing and support, so higher revenue does not automatically mean a higher margin.
 
 The practical first commercial milestone is 10–20 merchants who use the product repeatedly and choose to pay after the trial. Retaining that group is more informative than collecting many free installations.
 
@@ -326,7 +330,7 @@ Shopify's current published standard terms provide 0% revenue share on the first
 
 App billing also carries a 2.9% processing fee, with applicable taxes and possible regional fees. App Store registration is a separate one-time $19 fee per Partner account. Confirm the account's actual eligibility and deductions before treating any scenario as a payout estimate. [Shopify developer revenue-share terms](https://shopify.dev/docs/apps/launch/distribution/revenue-share).
 
-For an eligible early-stage account below the threshold, $2,800 of gross revenue would have a simplified processing deduction of **$81.20**, leaving **$2,718.80 before all other costs**. The following operating examples assume that 0% revenue-share eligibility.
+For an eligible early-stage account below the threshold, $1,599 of gross revenue would have a simplified processing deduction of **$46.37**, leaving **$1,552.63 before all other costs**. The following operating examples assume that 0% revenue-share eligibility.
 
 ### 10.2 Costs that need a budget
 
@@ -358,7 +362,7 @@ The table below is a planning model, not a quote for hosting or a prediction of 
 
 Assumptions:
 
-- $28 blended subscription revenue per store per 30-day cycle.
+- $15.99 blended subscription revenue per store per 30-day cycle.
 - A 2.9% Shopify processing deduction and no revenue-share deduction at this stage.
 - $8 variable service cost per store: an assumed $3 for incremental processing/storage/email plus $5 of recurring support labor.
 - The $5 support allowance represents 20 minutes valued at $15/hour.
@@ -369,10 +373,10 @@ Assumptions:
 
 | Paying stores | Gross revenue | Processing fee | Variable service cost | Fixed infrastructure | Marketing | Provider reserve | Modeled surplus before excluded costs |
 | ------------- | ------------: | -------------: | --------------------: | -------------------: | --------: | ---------------: | ------------------------------------: |
-| 50            |        $1,400 |         $40.60 |                  $400 |                 $100 |      $100 |              $50 |                               $709.40 |
-| 100           |        $2,800 |         $81.20 |                  $800 |                 $200 |      $300 |             $100 |                             $1,318.80 |
-| 250           |        $7,000 |        $203.00 |                $2,000 |                 $400 |      $700 |             $250 |                             $3,447.00 |
-| 500           |       $14,000 |        $406.00 |                $4,000 |                 $700 |    $1,500 |             $400 |                             $6,994.00 |
+| 50            |       $799.50 |         $23.19 |                  $400 |                 $100 |      $100 |              $50 |                               $126.31 |
+| 100           |        $1,599 |         $46.37 |                  $800 |                 $200 |      $300 |             $100 |                               $152.63 |
+| 250           |     $3,997.50 |        $115.93 |                $2,000 |                 $400 |      $700 |             $250 |                               $531.57 |
+| 500           |        $7,995 |        $231.86 |                $4,000 |                 $700 |    $1,500 |             $400 |                             $1,163.14 |
 
 If the founder performs support personally, the model still values that time as a cost. The surplus is therefore not a promise of salary or distributable cash. Actual provider fees or support requirements could exceed the reserves.
 
@@ -380,19 +384,19 @@ If the founder performs support personally, the model still values that time as 
 
 Before fixed costs and customer acquisition, the assumed contribution per store is:
 
-**$28 × (1 − 2.9%) − $8 = $19.188 per cycle.**
+**$15.99 × (1 − 2.9%) − $8 = approximately $7.53 per cycle.**
 
 On that basis:
 
-- $300 of fixed costs requires approximately 16 active paying stores.
-- $500 requires approximately 27.
-- $2,000, including a larger maintenance or owner-pay budget, requires approximately 105.
+- $300 of fixed costs requires approximately 40 active paying stores.
+- $500 requires approximately 67.
+- $2,000, including a larger maintenance or owner-pay budget, requires approximately 266.
 
 These examples treat the stated fixed-cost amount as the total relevant fixed budget; do not add it twice to the earlier scenario table.
 
-If acquiring a paying store costs $50, the simple payback time is around 2.6 cycles. At $100 it is around 5.2 cycles; at $200 it is around 10.4 cycles. This assumes the store stays subscribed and continues producing the same contribution.
+If acquiring a paying store costs $50, the simple payback time is around 6.6 cycles. At $100 it is around 13.3 cycles; at $200 it is around 26.6 cycles. This assumes the store stays subscribed and continues producing the same contribution.
 
-If the full 15% Shopify revenue-share rate later applies to additional revenue, contribution on that revenue falls to approximately **$14.99 per store** under the same service-cost assumption. Customer retention then becomes even more important.
+If the full 15% Shopify revenue-share rate later applies to additional revenue, contribution on that revenue falls to approximately **$5.13 per store** under the same service-cost assumption. Customer retention then becomes even more important.
 
 ### 10.6 Stress-test the document allowance
 
@@ -400,9 +404,9 @@ Growth permits up to 250 invoices in a calendar month and up to 10 pages per doc
 
 Assume, purely for a stress test, that effective OCR computing costs $0.01 per page and other variable service costs are $6 for that customer:
 
-**$49 − $1.421 processing fee − $25 computing − $6 other service = $16.579 contribution before fixed costs.**
+**$29.99 − approximately $0.87 processing fee − $25 computing − $6 other service = approximately negative $1.88 contribution before fixed costs.**
 
-At an effective computing cost of $0.02 per page, the same customer produces approximately **negative $8.42** before fixed costs.
+At an effective computing cost of $0.02 per page, the same customer produces approximately **negative $26.88** before fixed costs. The lower launch price leaves less room for heavy unattended processing or recurring manual support.
 
 Those per-page figures are hypothetical operating costs, not published Tesseract charges. The example shows why affordable pricing needs observed page counts, processing time and retry rates. Avoid offering unlimited processing before those measurements are available.
 
@@ -418,9 +422,9 @@ New paying stores already exclude trials that fail to convert. Revenue shown is 
 
 | Hypothetical acquisition pattern | New paying stores per cycle | Cancellation rate per cycle | Revenue run rate after 3 cycles | After 6 cycles | After 12 cycles |
 | -------------------------------- | --------------------------: | --------------------------: | ------------------------------: | -------------: | --------------: |
-| Slow acquisition                 |                           5 |                          5% |                            $399 |           $742 |          $1,287 |
-| Steady acquisition               |                          15 |                          4% |                          $1,210 |         $2,281 |          $4,067 |
-| Strong acquisition               |                          30 |                          3% |                          $2,445 |         $4,677 |          $8,572 |
+| Slow acquisition                 |                           5 |                          5% |                            $228 |           $424 |            $735 |
+| Steady acquisition               |                          15 |                          4% |                            $691 |         $1,303 |          $2,322 |
+| Strong acquisition               |                          30 |                          3% |                          $1,396 |         $2,671 |          $4,895 |
 
 The corresponding expected active-store counts after 12 cycles are approximately 46, 145 and 306. The model calculates with unrounded customer counts before rounding the displayed revenue.
 
@@ -449,7 +453,7 @@ Work with 5–10 appropriate merchants. For each one:
 5. Check whether staff use the app again on the next delivery.
 6. Ask whether the demonstrated benefit is worth the current price.
 
-Offer help with setup, but measure that help. A $19 subscription that requires hours of recurring manual support may not be commercially viable.
+Offer help with setup, but measure that help. A $9.99 subscription that requires hours of recurring manual support may not be commercially viable.
 
 ### Use relevant acquisition channels
 
@@ -487,7 +491,7 @@ The priority should be to make the existing promise dependable before expanding 
 | High                | Measure correction rates on real supplier documents                                          | Accuracy determines the user's actual time saving                       |
 | High                | Improve onboarding, first-document guidance and recovery messages                            | More trial users can reach a successful first invoice                   |
 | High                | Add explicit pack/case-to-unit conversion                                                    | A correctly read pack price can still be the wrong product unit cost    |
-| High                | Measure per-page cost, retries, support minutes and active API connections                   | Protect the economics of the $19/$49 plans                              |
+| High                | Measure per-page cost, retries, support minutes and active API connections                   | Protect the economics of the $9.99/$29.99 plans                        |
 | High                | Expand QuickBooks purchase-tax handling with supported country-specific behavior             | Current limitations reduce the value of live exports for taxed invoices |
 | Medium              | Investigate import/sync with Shopify native purchasing records                               | Reduce duplicate PO setup where supported APIs permit it                |
 | Medium              | Supplier price-change trends and alerts                                                      | Give merchants useful reasons to return beyond initial capture          |
@@ -556,7 +560,7 @@ A practical objective is to establish a small group of satisfied, renewing custo
 
 Proceed as a focused supplier-invoice control product for Shopify inventory merchants. Keep the public promise narrow enough to demonstrate with real documents: capture, review, check purchase/delivery differences, and apply approved updates.
 
-Treat the $19/$49 pricing as a hypothesis to test against measurable customer value. A merchant who needs only basic OCR has lower-priced alternatives. A merchant who needs reliable approval and accounting handover may be willing to pay for the complete workflow.
+Treat the $9.99/$29.99 launch pricing as a hypothesis to test against measurable customer value and service costs. A merchant who needs only basic OCR has lower-priced alternatives. A merchant who needs reliable approval and accounting handover may be willing to pay for the complete workflow.
 
 The immediate priorities are operational readiness, sample-based extraction improvement, clearer onboarding and a small paying pilot. Then use observed retention and service costs to decide whether to increase invoice allowances, change packaging or invest in broader features.
 
@@ -564,7 +568,7 @@ The revenue scenarios show that a useful small software business is possible at 
 
 ## 17. Evidence and source notes
 
-**Product evidence reviewed:** current project source and implementation history. No new app features, subscription prices, external account settings or database records were changed to prepare this report.
+**Product evidence reviewed:** project source and implementation history at the original assessment date. The 6 October 2026 pricing update revised subscription prices and related planning examples. It did not revalidate product readiness, change external account settings or modify database records.
 
 Useful source files:
 

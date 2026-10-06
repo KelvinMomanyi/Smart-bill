@@ -193,8 +193,8 @@ export default function Dashboard() {
         {!subscription && (
           <Banner tone="info" title="Start your 14-day trial">
             <p>
-              Plans start at $19 USD every 30 days. Choose a plan in Settings to
-              start capturing invoices.
+              Plans start at ${PLANS.STARTER.price} USD every 30 days. Choose a
+              plan in Settings to start capturing invoices.
             </p>
             <Button url="/app/settings">Choose a plan</Button>
           </Banner>

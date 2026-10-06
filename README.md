@@ -14,8 +14,8 @@ Deploy the app to publish these changes. Upload `public/brand/smartbill-icon-120
 
 | Plan    | USD every 30 days | Invoices per calendar month |
 | ------- | ----------------: | --------------------------: |
-| Starter |               $19 |                          50 |
-| Growth  |               $49 |                         250 |
+| Starter |             $9.99 |                          50 |
+| Growth  |            $29.99 |                         250 |
 
 Both plans include a 14-day trial, invoice editing and approval, purchase orders, physical receipt tracking, product cost sync, CSV export, vendor analytics, weekly reports and accounting connections. Growth adds batches of up to 10 documents and an optional invoice email inbox.
 

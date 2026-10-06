@@ -1,0 +1,25 @@
+import assert from 'node:assert/strict';
+import { readFile, writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { createCanvas, loadImage } from '@napi-rs/canvas';
+
+const source = process.argv[2];
+if (!source) throw new Error('Pass the generated feature image path.');
+const original = await loadImage(source);
+const ratioDifference = Math.abs(original.width / original.height - 16 / 9);
+assert.ok(ratioDifference < 0.02, 'Source must have a 16:9 aspect ratio.');
+const destination = resolve('output/imagegen/smartbill-feature-media-1600x900.png');
+const canvas = createCanvas(1600, 900);
+const context = canvas.getContext('2d');
+context.imageSmoothingEnabled = true;
+context.imageSmoothingQuality = 'high';
+context.fillStyle = '#e8f4ec';
+context.fillRect(0, 0, 1600, 900);
+context.drawImage(original, 0, 0, 1600, 900);
+const png = canvas.toBuffer('image/png');
+await writeFile(destination, png);
+const verified = await loadImage(destination);
+assert.equal(verified.width, 1600);
+assert.equal(verified.height, 900);
+assert.ok(png.length < 20_000_000, 'Image should stay within normal upload limits.');
+console.log(JSON.stringify({ sourceWidth: original.width, sourceHeight: original.height, destination, width: verified.width, height: verified.height, bytes: png.length }));

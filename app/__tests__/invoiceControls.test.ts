@@ -186,8 +186,8 @@ test("Xero proportional tax allocation preserves the exact total", () => {
   assert.equal(payload.LineItems[0].TaxAmount, 40);
 });
 test("plan boundaries enforce the advertised allowance and use UTC calendar months", () => {
-  assert.equal(PLANS.STARTER.price, 19);
-  assert.equal(PLANS.GROWTH.price, 49);
+  assert.equal(PLANS.STARTER.price, 9.99);
+  assert.equal(PLANS.GROWTH.price, 29.99);
   assert.equal(planFromName("SmartBill Scale"), null);
   assert.equal(usageAvailable("STARTER", 49), true);
   assert.equal(usageAvailable("STARTER", 50), false);

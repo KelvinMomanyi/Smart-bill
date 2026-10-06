@@ -1,0 +1,20 @@
+{
+  "source": "app/routes/app.invoices.$id.tsx",
+  "method": "Actual landed-cost JSX rendered with the installed Polaris components; fictional sample data; no database or network calls.",
+  "products": [
+    {
+      "product": "Linen tote",
+      "quantity": 40,
+      "baseCost": 6,
+      "allocatedCharges": 48,
+      "landedCost": 7.2
+    },
+    {
+      "product": "Ceramic cup",
+      "quantity": 60,
+      "baseCost": 4,
+      "allocatedCharges": 48,
+      "landedCost": 4.8
+    }
+  ]
+}

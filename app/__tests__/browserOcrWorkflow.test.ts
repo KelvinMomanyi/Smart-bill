@@ -241,7 +241,7 @@ test("browser completion route enforces subscription and job document lookup is 
                           {
                             plan: {
                               pricingDetails: {
-                                price: { amount: "19", currencyCode: "USD" },
+                                price: { amount: "9.99", currencyCode: "USD" },
                                 interval: "EVERY_30_DAYS",
                               },
                             },
