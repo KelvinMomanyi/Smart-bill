@@ -29,6 +29,8 @@ model Session {
   locale        String?
   collaborator  Boolean?  @default(false)
   emailVerified Boolean?  @default(false)
+  refreshToken  String?
+  refreshTokenExpires DateTime?
 
   // Custom smart-bill fields
   role String? @default("SCANNER") // 'ADMIN' or 'SCANNER'

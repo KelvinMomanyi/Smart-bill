@@ -285,13 +285,11 @@ test("browser upload stores one private original and reserves usage once without
     SUPABASE_URL: process.env.SUPABASE_URL,
     SUPABASE_SECRET_KEY: process.env.SUPABASE_SECRET_KEY,
     SUPABASE_STORAGE_BUCKET: process.env.SUPABASE_STORAGE_BUCKET,
-    SHOPIFY_BILLING_TEST: process.env.SHOPIFY_BILLING_TEST,
   };
   Object.assign(process.env, {
     SUPABASE_URL: "https://ocr-test.supabase.co",
     SUPABASE_SECRET_KEY: "sb_secret_fake-ocr-test",
     SUPABASE_STORAGE_BUCKET: "ocr-test",
-    SHOPIFY_BILLING_TEST: "true",
   });
   t.after(() => {
     for (const [key, value] of Object.entries(originalEnvironment)) {
@@ -299,7 +297,24 @@ test("browser upload stores one private original and reserves usage once without
       else process.env[key] = value;
     }
   });
-  t.mock.method(authenticate, "admin", async () => ({ session: { shop, id: "owner" }, admin: {} }));
+  t.mock.method(authenticate, "admin", async () => ({
+    session: { shop, id: "owner" },
+    admin: {
+      graphql: async () => Response.json({
+        data: {
+          shop: { plan: { partnerDevelopment: false } },
+          currentAppInstallation: {
+            activeSubscriptions: [{
+              id: "sub-1", name: "SmartBill Growth", status: "ACTIVE", test: false,
+              lineItems: [{ plan: { pricingDetails: {
+                price: { amount: "29.99", currencyCode: "USD" }, interval: "EVERY_30_DAYS",
+              } } }],
+            }],
+          },
+        },
+      }),
+    },
+  }));
   let stored = 0;
   t.mock.method(globalThis, "fetch", async (url: any) => {
     const path = new URL(String(url)).pathname;

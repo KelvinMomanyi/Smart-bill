@@ -27,6 +27,7 @@ import {
   getUsage,
   requireSubscription,
   subscriptionFor,
+  isDevelopmentStore,
 } from "../services/billing.server";
 import { PLANS, planFromName, TRIAL_DAYS } from "../utils/plans";
 import { validCurrency } from "../utils/invoiceRules";
@@ -173,6 +174,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 export async function action({ request }: ActionFunctionArgs) {
   const {
     session,
+    admin,
     billing,
     actor,
     redirect: shopifyRedirect,
@@ -185,9 +187,7 @@ export async function action({ request }: ActionFunctionArgs) {
       if (!key) throw new Error("Choose a valid plan.");
       return await billing.request({
         plan: PLANS[key].name,
-        isTest:
-          process.env.NODE_ENV !== "production" ||
-          process.env.SHOPIFY_BILLING_TEST === "true",
+        isTest: await isDevelopmentStore(admin),
         returnUrl: `${process.env.SHOPIFY_APP_URL?.replace(/\/$/, "") || new URL(request.url).origin}/app/settings`,
       });
     }
@@ -501,7 +501,7 @@ export default function Settings() {
             {subscription && !subscription.matchesPrice && (
               <Banner tone="info">
                 Your existing subscription uses earlier pricing. Choose a plan
-                below and approve the lower price in Shopify to replace it.
+                below and approve the current price in Shopify to replace it.
               </Banner>
             )}
             <Text as="p">
@@ -528,7 +528,9 @@ export default function Settings() {
                     >
                       {subscription?.plan === key && subscription.matchesPrice
                         ? "Current plan"
-                        : `Start ${TRIAL_DAYS}-day trial / switch`}
+                        : subscription
+                          ? `Switch to ${plan.label}`
+                          : `Start ${TRIAL_DAYS}-day trial`}
                     </Button>
                   </BlockStack>
                 </Form>

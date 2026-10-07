@@ -9,6 +9,7 @@ import "./phase2.test";
 import "./invoiceJobs.test";
 import "./browserOcr.test";
 import "./browserOcrWorkflow.test";
+import "./billing.test";
 import "./invoiceDeletion.test";
 import "./accountingIntegration.test";
 import "./accountingWorkflow.test";

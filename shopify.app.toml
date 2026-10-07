@@ -12,7 +12,7 @@ dev_store_url = "creatorsstore254.myshopify.com"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_products,write_inventory,read_inventory"
+scopes = "read_products,write_products,write_inventory,read_inventory"
 
 [auth]
 redirect_urls = [
@@ -22,7 +22,7 @@ redirect_urls = [
 ]
 
 [webhooks]
-api_version = "2025-10"
+api_version = "2026-10"
 
   [[webhooks.subscriptions]]
   compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]

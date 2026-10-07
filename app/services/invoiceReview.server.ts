@@ -51,18 +51,18 @@ export async function findVariants(admin: Admin, query: string) {
     { variables: { query: query.trim().slice(0, 150) } },
   );
   const body = await response.json();
-  if ("errors" in body && body.errors)
+  if (("errors" in body && body.errors) || !body.data?.productVariants)
     throw new Error("Product search failed.");
   return body.data.productVariants.nodes as Variant[];
 }
 export type Variant = {
   id: string;
   title: string;
-  sku: string;
+  sku?: string | null;
   product: { title: string };
   inventoryItem: {
     id: string;
-    unitCost: { amount: string; currencyCode: string } | null;
+    unitCost?: { amount: string; currencyCode: string } | null;
     measurement?: { weight?: { value: number; unit: string } | null } | null;
   };
 };
@@ -78,10 +78,10 @@ export async function variantsByIds(admin: Admin, ids: string[]) {
     { variables: { ids: [...new Set(ids)] } },
   );
   const body = await response.json();
-  if ("errors" in body && body.errors)
+  if (("errors" in body && body.errors) || !body.data)
     throw new Error("Could not verify product matches.");
   const variants = (body.data.nodes || []).filter(
-    (v: Variant | null) => v?.id,
+    (v) => v?.id,
   ) as Variant[];
   if (variants.length !== new Set(ids).size)
     throw new Error(

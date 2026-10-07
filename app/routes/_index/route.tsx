@@ -1,10 +1,9 @@
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { redirect } from "@remix-run/node";
-import { Form, Link, useLoaderData } from "@remix-run/react";
+import { Link } from "@remix-run/react";
 
 import { IntuitTrademarkNotice } from "../../components/IntuitTrademarkNotice";
 import { SmartBillBrand } from "../../components/SmartBillBrand";
-import { login } from "../../shopify.server";
 import { PLANS, TRIAL_DAYS } from "../../utils/plans";
 
 import styles from "./styles.module.css";
@@ -16,12 +15,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     throw redirect(`/app?${url.searchParams.toString()}`);
   }
 
-  return { showForm: Boolean(login) };
+  return null;
 };
 
 export default function App() {
-  const { showForm } = useLoaderData<typeof loader>();
-
   return (
     <div className={styles.index}>
       <div className={styles.content}>
@@ -33,18 +30,12 @@ export default function App() {
           Capture vendor invoices, reconcile purchase orders, update Shopify
           COGS, and prepare accounting exports.
         </p>
-        {showForm && (
-          <Form className={styles.form} method="post" action="/auth/login">
-            <label className={styles.label}>
-              <span>Shop domain</span>
-              <input className={styles.input} type="text" name="shop" />
-              <span>e.g: my-shop-domain.myshopify.com</span>
-            </label>
-            <button className={styles.button} type="submit">
-              Log in
-            </button>
-          </Form>
-        )}
+        <div className={styles.launch}>
+          <a className={styles.button} href="https://admin.shopify.com/apps" target="_top">
+            Open Shopify admin
+          </a>
+          <p>Choose SmartBill from Apps in your Shopify admin to get started.</p>
+        </div>
         <ul className={styles.list}>
           <li>
             <strong>Invoice OCR</strong>. Turn supplier invoice images into

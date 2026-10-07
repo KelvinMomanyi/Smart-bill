@@ -48,9 +48,9 @@ function resolveAppUrl() {
 const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY,
   apiSecretKey: process.env.SHOPIFY_API_SECRET || "",
-  apiVersion: ApiVersion.October25,
+  apiVersion: ApiVersion.October26,
   scopes: (
-    process.env.SCOPES || "read_products,write_inventory,read_inventory"
+    process.env.SCOPES || "read_products,write_products,write_inventory,read_inventory"
   ).split(","),
   appUrl: resolveAppUrl(),
   authPathPrefix: "/auth",
@@ -86,15 +86,11 @@ const shopify = shopifyApp({
   },
   future: {
     unstable_newEmbeddedAuthStrategy: true,
-    removeRest: true,
   },
-  ...(process.env.SHOP_CUSTOM_DOMAIN
-    ? { customShopDomains: [process.env.SHOP_CUSTOM_DOMAIN] }
-    : {}),
 });
 
 export default shopify;
-export const apiVersion = ApiVersion.October25;
+export const apiVersion = ApiVersion.October26;
 export const addDocumentResponseHeaders = shopify.addDocumentResponseHeaders;
 export const authenticate = shopify.authenticate;
 export const unauthenticated = shopify.unauthenticated;

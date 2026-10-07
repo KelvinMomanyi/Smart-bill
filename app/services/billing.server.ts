@@ -1,23 +1,25 @@
 import prisma from "../db.server";
 import { authenticate, unauthenticated } from "../shopify.server";
 import { PLANS, planFromName, usageMonth, type PlanKey } from "../utils/plans";
-import { testBillingPlan } from "../utils/billingMode";
 
 type Admin = Awaited<ReturnType<typeof authenticate.admin>>["admin"];
-export async function subscriptionFor(admin: Admin) {
-  const simulatedPlan = testBillingPlan(process.env.SHOPIFY_BILLING_TEST);
-  if (simulatedPlan) {
-    return {
-      id: "smartbill-test-billing-bypass",
-      plan: simulatedPlan,
-      currentPrice: PLANS[simulatedPlan].price,
-      currentCurrency: "USD",
-      matchesPrice: true,
-    };
-  }
 
+export async function isDevelopmentStore(admin: Admin) {
+  const response = await admin.graphql(`#graphql
+    query SmartBillBillingStore {
+      shop { plan { partnerDevelopment } }
+    }`);
+  const body = await response.json();
+  const development = body.data?.shop?.plan?.partnerDevelopment;
+  if (("errors" in body && body.errors) || typeof development !== "boolean")
+    throw new Error("Unable to verify your store's billing status. Please retry.");
+  return development;
+}
+
+export async function subscriptionFor(admin: Admin) {
   const response = await admin.graphql(`#graphql
     query SmartBillSubscription {
+      shop { plan { partnerDevelopment } }
       currentAppInstallation { activeSubscriptions { id name status test
         lineItems { plan { pricingDetails { ... on AppRecurringPricing { price { amount currencyCode } interval } } } }
       } }
@@ -44,9 +46,7 @@ export async function subscriptionFor(admin: Admin) {
     (s) =>
       s.status === "ACTIVE" &&
       planFromName(s.name) &&
-      (!s.test ||
-        process.env.NODE_ENV !== "production" ||
-        process.env.SHOPIFY_BILLING_TEST === "true"),
+      (!s.test || body.data?.shop?.plan?.partnerDevelopment === true),
   );
   if (!active) return null;
   const plan = planFromName(active.name)!;

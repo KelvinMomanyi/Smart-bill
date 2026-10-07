@@ -140,7 +140,13 @@ Call `/api/maintenance/run` once daily with the same bearer secret to escalate o
 
 Browser and server OCR support up to ten pages per document. File and batch limits are 10 MB per document and 25 MB per batch. Vercel-hosted browser uploads are capped at 4 MB per batch because Vercel Functions have a 4.5 MB request/response payload limit. Larger documents and full-size inbound email payloads need the Node service behind an ingress that supports these sizes. Test original-document viewing and OCR on the actual host.
 
-The installed Shopify SDK supports `2025-10`, now selected for Admin API calls and webhooks. Upgrade the SDK and retest before that API version retires on October 16, 2026; see [Shopify's version schedule](https://shopify.dev/docs/api/usage/versioning). Current scopes are limited to product reads and inventory cost access.
+Admin API calls, generated GraphQL types and webhooks target stable version `2026-10`; see [Shopify's version schedule](https://shopify.dev/docs/api/usage/versioning). Cost sync requires product read/write and inventory read/write access: `write_products` is needed to save its audit metafields on product variants. Deploy `shopify.app.toml` and approve the updated permissions for existing installations. Match any production `SCOPES` environment override to the configuration.
+
+Run `npm run graphql-codegen -- --config .graphqlrc.ts` before `npm run typecheck` to validate operations against that API schema and check their generated response types. Generated schema/types are local build artifacts under `app/types`.
+
+After `npm run build:check`, run `npm run check:submission` to check public pages and Shopify login redirects in the production bundle using fake credentials and no database. See [the submission review](APP_STORE_SUBMISSION_REVIEW.md) for the remaining deployment and live checks.
+
+Shopify SDK updates require Node 22 or newer and the committed migration adding nullable session refresh-token fields. The Vercel release command applies this migration before serving the new build. Local build/check commands do not migrate a database.
 
 ## Accounting and email activation
 
@@ -162,7 +168,8 @@ The store still has one Shopify base currency. FX revaluation is calculated and 
 ## Before publication
 
 - Public legal pages are available at `/terms` and `/privacy`. Configure `LEGAL_OPERATOR_NAME`, `PUBLIC_SUPPORT_EMAIL`, `LEGAL_POSTAL_ADDRESS`, `LEGAL_GOVERNING_LAW` and `LEGAL_EFFECTIVE_DATE` in the production environment, redeploy, and verify both pages in a signed-out browser before supplying their HTTPS URLs to Shopify, Intuit or another marketplace. Have the final language reviewed for the operator's actual jurisdiction and business practices.
-- Apply the migration and test install/login with both the owner and a separate staff account. `SHOPIFY_BILLING_TEST=true` temporarily treats authenticated installed stores as Growth subscribers so all paid features can be acceptance-tested without a charge. Set it to `false` and redeploy before publishing so Shopify subscription checks are enforced.
+- Apply the migration and test Shopify-managed installation/launch with both the owner and a separate staff account. Public pages direct merchants to Shopify admin; no shop-domain form is required. Install on development stores from the Dev Dashboard, and use the Shopify App Store listing when published.
+- Billing always checks actual approved Shopify subscriptions. Merchant stores use real charges; only stores identified by Shopify's `shop.plan.partnerDevelopment` use approved test charges. There is no environment-variable bypass. Remove any old `SHOPIFY_BILLING_TEST` variable from Vercel settings. Verify approval, decline, reinstall and both plan-switching directions before submission.
 - Upload real supplier samples, correct extraction, record partial deliveries, approve, preview costs, sync and restore on test products. Test usage exhaustion and duplicate capture.
 - Exercise accounting export and interrupted-response verification against test organisations, including tax and currency mismatch cases.
 - Deploy the compliance webhook subscriptions in `shopify.app.toml` and verify signed requests. Uninstall stops jobs and removes sessions/connections. Shop redaction deletes the shop's invoice files and app records; customer-specific topics are acknowledged because SmartBill stores supplier invoices, not customer/order records.
