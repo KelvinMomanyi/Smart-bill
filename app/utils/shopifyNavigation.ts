@@ -23,3 +23,22 @@ export function shopifyEmbeddedAppUrl(shop: string, apiKey: string) {
   // The installed Shopify SDK also uses the API key for embedded app URLs.
   return `${appsUrl}/${apiKey}`;
 }
+
+export function shopifyAppListingUrl(value?: string | null) {
+  if (!value?.trim()) return null;
+  try {
+    const url = new URL(value.trim());
+    if (
+      url.protocol !== "https:" ||
+      url.hostname !== "apps.shopify.com" ||
+      url.port ||
+      url.username ||
+      url.password ||
+      !/^\/[a-zA-Z0-9-]+(?:\/preview\/[a-zA-Z-]+)?\/?$/.test(url.pathname)
+    )
+      return null;
+    return url.href;
+  } catch {
+    return null;
+  }
+}

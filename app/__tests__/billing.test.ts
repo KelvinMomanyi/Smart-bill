@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import prisma from "../db.server";
 import { PLANS, type PlanKey } from "../utils/plans";
-import { shopDomain, shopifyAdminAppsUrl } from "../utils/shopifyNavigation";
+import {
+  shopDomain,
+  shopifyAdminAppsUrl,
+  shopifyAppListingUrl,
+} from "../utils/shopifyNavigation";
 
 const originalCount = prisma.session.count;
 (prisma.session as any).count = async () => 0;
@@ -398,4 +402,47 @@ test("billing API failures retain a retryable merchant message without provider 
     result.error,
     "We couldn't open Shopify's subscription approval. Please try again.",
   );
+});
+
+test("public installation uses the configured Shopify listing without guessing a store", async (t) => {
+  const previous = process.env.SHOPIFY_APP_LISTING_URL;
+  t.after(() => {
+    if (previous === undefined) delete process.env.SHOPIFY_APP_LISTING_URL;
+    else process.env.SHOPIFY_APP_LISTING_URL = previous;
+  });
+  process.env.SHOPIFY_APP_LISTING_URL =
+    "https://apps.shopify.com/example-listing-for-tests";
+  const data = await homeLoader({
+    request: new Request(
+      "https://app.example/?listingUrl=https://evil.example",
+    ),
+  } as any);
+  assert.equal(data.listingUrl, process.env.SHOPIFY_APP_LISTING_URL);
+  delete process.env.SHOPIFY_APP_LISTING_URL;
+  assert.equal(
+    (await homeLoader({ request: new Request("https://app.example/") } as any))
+      .listingUrl,
+    null,
+  );
+});
+
+test("listing links accept Shopify listings/previews and reject generic Admin or external destinations", () => {
+  for (const value of [
+    "https://apps.shopify.com/example-listing-for-tests",
+    "https://apps.shopify.com/example-preview-for-tests/preview/en",
+  ])
+    assert.equal(shopifyAppListingUrl(value), value);
+  for (const value of [
+    null,
+    "",
+    "bad url",
+    "http://apps.shopify.com/example",
+    "https://apps.shopify.com/",
+    "https://admin.shopify.com/apps",
+    "https://admin.shopify.com/store/review/apps",
+    "https://apps.shopify.com.evil.example/example",
+    "https://user:secret@apps.shopify.com/example",
+    "https://apps.shopify.com:8443/example",
+  ])
+    assert.equal(shopifyAppListingUrl(value), null);
 });

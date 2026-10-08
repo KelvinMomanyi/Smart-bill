@@ -1,10 +1,11 @@
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { redirect } from "@remix-run/node";
-import { Link } from "@remix-run/react";
+import { Link, useLoaderData } from "@remix-run/react";
 
 import { IntuitTrademarkNotice } from "../../components/IntuitTrademarkNotice";
 import { SmartBillBrand } from "../../components/SmartBillBrand";
 import { PLANS, TRIAL_DAYS } from "../../utils/plans";
+import { shopifyAppListingUrl } from "../../utils/shopifyNavigation";
 
 import styles from "./styles.module.css";
 
@@ -15,10 +16,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     throw redirect(`/app?${url.searchParams.toString()}`);
   }
 
-  return null;
+  return {
+    listingUrl: shopifyAppListingUrl(process.env.SHOPIFY_APP_LISTING_URL),
+  };
 };
 
 export default function App() {
+  const { listingUrl } = useLoaderData<typeof loader>();
   return (
     <div className={styles.index}>
       <div className={styles.content}>
@@ -31,15 +35,25 @@ export default function App() {
           COGS, and prepare accounting exports.
         </p>
         <div className={styles.launch}>
-          <a
-            className={styles.button}
-            href="https://admin.shopify.com/apps"
-            target="_top"
-          >
-            Choose your store in Shopify
-          </a>
+          {listingUrl ? (
+            <>
+              <a className={styles.button} href={listingUrl} target="_top">
+                Install SmartBill on Shopify
+              </a>
+              <p>
+                Shopify will guide you through choosing a store and installing
+                SmartBill.
+              </p>
+            </>
+          ) : (
+            <p>
+              For a test installation, use the SmartBill installation link
+              provided by Shopify.
+            </p>
+          )}
           <p>
-            Choose SmartBill from Apps in your Shopify admin to get started.
+            Already installed? Open SmartBill from Apps in the Shopify store
+            where you installed it.
           </p>
         </div>
         <ul className={styles.list}>

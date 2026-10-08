@@ -21,6 +21,7 @@ Object.assign(process.env, {
   SHOPIFY_APP_URL: "https://app.example",
   SCOPES: "read_products,write_products,write_inventory,read_inventory",
 });
+delete process.env.SHOPIFY_APP_LISTING_URL;
 const shops = [
   "billing-review-a.myshopify.com",
   "billing-review-b.myshopify.com",
@@ -501,12 +502,44 @@ try {
       .count(),
     0,
   );
+  assert.equal(
+    await publicPage
+      .locator('a[href="https://admin.shopify.com/apps"]')
+      .count(),
+    0,
+  );
   await publicPage
-    .getByRole("link", { name: "Choose your store in Shopify", exact: true })
+    .getByText(
+      "For a test installation, use the SmartBill installation link provided by Shopify.",
+      { exact: true },
+    )
     .waitFor();
   checks.push(
-    "Public landing page explicitly asks merchants to choose their store",
+    "Public landing page does not send merchants to a generic Admin destination",
   );
+  const listingUrl = "https://apps.shopify.com/example-listing-for-tests";
+  process.env.SHOPIFY_APP_LISTING_URL = listingUrl;
+  await publicContext.route(listingUrl, (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: "<h1>Simulated Shopify listing for SmartBill</h1>",
+    }),
+  );
+  await publicPage.reload();
+  const install = publicPage.getByRole("link", {
+    name: "Install SmartBill on Shopify",
+    exact: true,
+  });
+  assert.equal(await install.getAttribute("href"), listingUrl);
+  await install.click();
+  await publicPage
+    .getByRole("heading", { name: "Simulated Shopify listing for SmartBill" })
+    .waitFor();
+  assert.equal(publicPage.url(), listingUrl);
+  checks.push(
+    "Public installation button opens the configured Shopify listing (simulated destination)",
+  );
+  delete process.env.SHOPIFY_APP_LISTING_URL;
   await publicContext.close();
   assert.deepEqual(exceptions, [], "No uncaught browser exceptions");
   assert.deepEqual(unexpectedNetwork, [], "No unexpected error responses");
