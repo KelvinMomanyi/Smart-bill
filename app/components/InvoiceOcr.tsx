@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "@remix-run/react";
+import { EmbeddedLink as Link } from "./EmbeddedLink";
 import { Banner, BlockStack, Text } from "@shopify/polaris";
 import { merchantErrorMessage } from "../utils/merchantErrors";
 import {

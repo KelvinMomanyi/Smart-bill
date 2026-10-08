@@ -7,13 +7,16 @@ import {
 } from "@remix-run/node";
 import {
   Form,
-  Link,
   useActionData,
   useFetcher,
   useLoaderData,
   useNavigation,
 } from "@remix-run/react";
 import { useEffect, useState } from "react";
+import {
+  EmbeddedLink as Link,
+  useEmbeddedAppPath,
+} from "../components/EmbeddedLink";
 import {
   Page,
   Card,
@@ -510,6 +513,7 @@ function InvoiceEditor({
 }: {
   data: ReturnType<typeof useLoaderData<typeof loader>>;
 }) {
+  const appPath = useEmbeddedAppPath();
   const {
     invoice,
     role,
@@ -586,7 +590,7 @@ function InvoiceEditor({
   return (
     <Page
       title={`Invoice ${invoice.invoiceNumber || invoice.id.slice(0, 8)}`}
-      backAction={{ url: "/app/invoices" }}
+      backAction={{ url: appPath("/app/invoices") }}
     >
       <BlockStack gap="400">
         {result && (
@@ -1259,7 +1263,7 @@ function InvoiceEditor({
               </>
             )}
             <InlineStack gap="200">
-              <Button url="/app/credit-notes">
+              <Button url={appPath("/app/credit-notes")}>
                 Record or match a credit note
               </Button>
             </InlineStack>
@@ -1374,13 +1378,17 @@ function InvoiceEditor({
             {role === "ADMIN" && (
               <InlineStack gap="300">
                 <Button
-                  url={`/app/invoices/${invoice.id}/accounting?platform=XERO`}
+                  url={appPath(
+                    `/app/invoices/${invoice.id}/accounting?platform=XERO`,
+                  )}
                   disabled={dirty}
                 >
                   Xero accounting details
                 </Button>
                 <Button
-                  url={`/app/invoices/${invoice.id}/accounting?platform=QUICKBOOKS`}
+                  url={appPath(
+                    `/app/invoices/${invoice.id}/accounting?platform=QUICKBOOKS`,
+                  )}
                   disabled={dirty}
                 >
                   QuickBooks accounting details

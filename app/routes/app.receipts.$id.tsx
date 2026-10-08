@@ -19,6 +19,7 @@ import { requireSubscription } from "../services/billing.server";
 import { refreshPurchaseOrder } from "../services/poReconciliation.server";
 import { receiptStatus } from "../utils/poMatching";
 import { AppErrorState } from "../components/AppErrorState";
+import { useEmbeddedAppPath } from "../components/EmbeddedLink";
 import { formatMoney } from "../utils/format";
 export async function loader({ request, params }: LoaderFunctionArgs) {
   const { session } = await requireAdmin(request);
@@ -132,6 +133,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
   }
 }
 export default function ReceiveStock() {
+  const appPath = useEmbeddedAppPath();
   const { po, requestKey } = useLoaderData<typeof loader>();
   const result = useActionData<typeof action>();
   const busy = useNavigation().state !== "idle";
@@ -148,7 +150,7 @@ export default function ReceiveStock() {
     <Page
       title={`Receive ${po.poNumber || po.id.slice(0, 8)}`}
       subtitle={po.vendor.name}
-      backAction={{ url: "/app/reconciliation" }}
+      backAction={{ url: appPath("/app/reconciliation") }}
     >
       <BlockStack gap="400">
         <Card>

@@ -47,6 +47,20 @@ try {
   assert.equal(login.status, 302);
   assert.equal(login.headers.get("Location"), "/");
 
+  // Native document navigation has no session-token header. Both SDK hints
+  // must recover the intended Admin store instead of dropping into login/home.
+  const native = await request(
+    `/app?${new URLSearchParams({
+      shop: "submission-check.myshopify.com",
+      host: btoa("admin.shopify.com/store/submission-check"),
+    })}`,
+  );
+  assert.equal(native.status, 302);
+  assert.match(
+    native.headers.get("Location"),
+    /^https:\/\/admin\.shopify\.com\/store\/submission-check\/apps\//,
+  );
+
   const manualLogin = await request("/auth/login", {
     method: "POST",
     body: new URLSearchParams({ shop: "manually-entered.myshopify.com" }),

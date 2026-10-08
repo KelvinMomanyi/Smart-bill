@@ -1,6 +1,5 @@
 import type { HeadersFunction, LoaderFunctionArgs } from "@remix-run/node";
 import {
-  Link,
   Outlet,
   isRouteErrorResponse,
   useLoaderData,
@@ -9,6 +8,7 @@ import {
 import { boundary } from "@shopify/shopify-app-remix/server";
 import { AppProvider } from "@shopify/shopify-app-remix/react";
 import { NavMenu } from "@shopify/app-bridge-react";
+import { EmbeddedLink as Link } from "../components/EmbeddedLink";
 import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
 import formStyles from "../styles/forms.css?url";
 

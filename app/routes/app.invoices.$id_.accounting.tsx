@@ -11,6 +11,7 @@ import {
   useNavigation,
 } from "@remix-run/react";
 import { Page, Card, BlockStack, Text, Banner, Button } from "@shopify/polaris";
+import { useEmbeddedAppPath } from "../components/EmbeddedLink";
 import prisma from "../db.server";
 import { requireAdmin } from "../utils/rbac.server";
 import { getAccountingCatalog } from "../services/accountingCatalog.server";
@@ -96,6 +97,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
   }
 }
 export default function InvoiceAccountingDetails() {
+  const appPath = useEmbeddedAppPath();
   const { invoice, platform, settings, catalog, error } =
     useLoaderData<typeof loader>();
   const result = useActionData<typeof action>();
@@ -133,7 +135,10 @@ export default function InvoiceAccountingDetails() {
   return (
     <Page
       title={`${platform} accounting details`}
-      backAction={{ content: "Invoice", url: `/app/invoices/${invoice.id}` }}
+      backAction={{
+        content: "Invoice",
+        url: appPath(`/app/invoices/${invoice.id}`),
+      }}
     >
       <BlockStack gap="400">
         {error && (
@@ -296,7 +301,7 @@ export default function InvoiceAccountingDetails() {
                   <Button submit loading={busy} disabled={locked}>
                     Save accounting choices
                   </Button>
-                  <Button url={`/app/invoices/${invoice.id}`}>
+                  <Button url={appPath(`/app/invoices/${invoice.id}`)}>
                     Return to invoice to export
                   </Button>
                 </BlockStack>

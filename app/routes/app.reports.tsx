@@ -1,5 +1,6 @@
 import { json, type LoaderFunctionArgs } from "@remix-run/node";
-import { Form, Link, useLoaderData } from "@remix-run/react";
+import { Form, useLoaderData } from "@remix-run/react";
+import { EmbeddedLink as Link, EmbeddedNavigationFields } from "../components/EmbeddedLink";
 import {
   Page,
   Card,
@@ -103,6 +104,7 @@ export default function VendorReport() {
       <BlockStack gap="400">
         <Card>
           <Form method="get">
+            <EmbeddedNavigationFields />
             <InlineStack gap="300" blockAlign="end">
               <label>
                 From <input name="from" type="date" defaultValue={r.from} />

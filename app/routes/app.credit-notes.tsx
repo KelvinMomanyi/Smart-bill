@@ -6,12 +6,16 @@ import {
 } from "@remix-run/node";
 import {
   Form,
-  Link,
   useActionData,
   useLoaderData,
   useOutlet,
   useNavigation,
 } from "@remix-run/react";
+import {
+  EmbeddedLink as Link,
+  EmbeddedNavigationFields,
+  useEmbeddedAppPath,
+} from "../components/EmbeddedLink";
 import {
   Page,
   Card,
@@ -95,6 +99,7 @@ export async function action({ request }: ActionFunctionArgs) {
 }
 
 export default function CreditNotes() {
+  const appPath = useEmbeddedAppPath();
   const data = useLoaderData<typeof loader>();
   const result = useActionData<typeof action>();
   const busy = useNavigation().state !== "idle";
@@ -104,7 +109,7 @@ export default function CreditNotes() {
     <Page
       title="Supplier credit notes"
       subtitle="Record, match and approve credits so invoice costs are net of returns and overcharges."
-      backAction={{ url: "/app/invoices" }}
+      backAction={{ url: appPath("/app/invoices") }}
     >
       <BlockStack gap="400">
         {result && (
@@ -185,6 +190,7 @@ export default function CreditNotes() {
         <Card>
           <BlockStack gap="300">
             <Form method="get">
+              <EmbeddedNavigationFields />
               <InlineStack gap="300">
                 <label>
                   Status{" "}

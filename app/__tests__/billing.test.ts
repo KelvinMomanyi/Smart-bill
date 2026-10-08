@@ -6,6 +6,7 @@ import {
   shopDomain,
   shopifyAdminAppsUrl,
   shopifyAppListingUrl,
+  shopifyAppPath,
 } from "../utils/shopifyNavigation";
 
 const originalCount = prisma.session.count;
@@ -402,6 +403,33 @@ test("billing API failures retain a retryable merchant message without provider 
     result.error,
     "We couldn't open Shopify's subscription approval. Please try again.",
   );
+});
+
+test("native embedded navigation retains both SDK hints for the authenticated store", () => {
+  const path = shopifyAppPath(
+    "/app/invoices?page=2&shop=other-review.myshopify.com&host=stale#review",
+    "correct-review.myshopify.com",
+  );
+  const url = new URL(path, "https://app.example");
+  assert.equal(url.searchParams.get("shop"), "correct-review.myshopify.com");
+  assert.equal(
+    atob(url.searchParams.get("host")!),
+    "admin.shopify.com/store/correct-review",
+  );
+  assert.equal(url.searchParams.get("page"), "2");
+  assert.equal(url.hash, "#review");
+  for (const outside of [
+    "/privacy",
+    "https://evil.example/app",
+    "//evil.example/app",
+    "/app/../privacy",
+  ])
+    assert.equal(
+      shopifyAppPath(outside, "correct-review.myshopify.com"),
+      outside,
+    );
+  assert.equal(shopifyAppPath("/app", null), "/app");
+  assert.equal(shopifyAppPath("/app", "evil.example"), "/app");
 });
 
 test("public installation uses the configured Shopify listing without guessing a store", async (t) => {

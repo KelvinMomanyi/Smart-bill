@@ -6,11 +6,14 @@ import {
 } from "@remix-run/node";
 import {
   Form,
-  Link,
   useActionData,
   useLoaderData,
   useNavigation,
 } from "@remix-run/react";
+import {
+  EmbeddedLink as Link,
+  useEmbeddedAppPath,
+} from "../components/EmbeddedLink";
 import {
   Page,
   Card,
@@ -124,6 +127,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
 }
 
 export default function CreditNoteDetail() {
+  const appPath = useEmbeddedAppPath();
   const { credit, role, candidates, connections, applied } =
     useLoaderData<typeof loader>();
   const result = useActionData<typeof action>();
@@ -131,7 +135,7 @@ export default function CreditNoteDetail() {
   return (
     <Page
       title={`Credit note ${credit.creditNoteNumber || credit.id.slice(0, 8)}`}
-      backAction={{ url: "/app/credit-notes" }}
+      backAction={{ url: appPath("/app/credit-notes") }}
       subtitle={
         credit.vendor?.name
           ? `${credit.vendor.name} - ${formatMoney(credit.amount, credit.currency)}`
@@ -270,7 +274,9 @@ export default function CreditNoteDetail() {
                       <Button submit loading={busy}>
                         Match to invoice
                       </Button>
-                      <Button url="/app/invoices">Find the invoice</Button>
+                      <Button url={appPath("/app/invoices")}>
+                        Find the invoice
+                      </Button>
                     </InlineStack>
                   </BlockStack>
                 </Form>

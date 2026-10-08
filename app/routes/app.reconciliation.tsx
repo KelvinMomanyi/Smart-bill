@@ -5,7 +5,6 @@ import {
 } from "@remix-run/node";
 import {
   Form,
-  Link,
   useActionData,
   useLoaderData,
   useNavigation,
@@ -24,6 +23,10 @@ import {
   TextField,
 } from "@shopify/polaris";
 import { useEffect, useRef, useState } from "react";
+import {
+  EmbeddedLink as Link,
+  useEmbeddedAppPath,
+} from "../components/EmbeddedLink";
 import { randomUUID } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import prisma from "../db.server";
@@ -161,6 +164,7 @@ function statusTone(status: string) {
 }
 
 export default function PurchaseOrders() {
+  const appPath = useEmbeddedAppPath();
   const { purchaseOrders, loadError, submissionId } =
     useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
@@ -292,7 +296,10 @@ export default function PurchaseOrders() {
           <Banner
             tone="critical"
             title="Purchase orders unavailable"
-            action={{ content: "Retry loading", url: "/app/reconciliation" }}
+            action={{
+              content: "Retry loading",
+              url: appPath("/app/reconciliation"),
+            }}
           >
             {loadError}
           </Banner>

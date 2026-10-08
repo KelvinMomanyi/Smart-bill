@@ -307,6 +307,20 @@ try {
     await page
       .getByRole("heading", { name: "Purchase orders", exact: true })
       .waitFor();
+    const nativeHome = new URL(
+      await page
+        .getByRole("link", { name: "SmartBill home", exact: true })
+        .getAttribute("href"),
+      origin,
+    );
+    assert.equal(nativeHome.searchParams.get("shop"), shop);
+    assert.equal(
+      atob(nativeHome.searchParams.get("host")),
+      "admin.shopify.com/store/po-browser",
+    );
+    checks.push(
+      `${javaScriptEnabled ? "JavaScript" : "Native HTML"}: home link preserves authenticated store and SDK host`,
+    );
     // Wait for hydration in the JS case; native controls also work without it.
     if (javaScriptEnabled)
       await page.waitForFunction(() => Boolean(window.__remixContext));

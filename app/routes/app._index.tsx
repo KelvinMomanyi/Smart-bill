@@ -6,13 +6,16 @@ import {
 } from "@remix-run/node";
 import {
   Form,
-  Link,
   useActionData,
   useLoaderData,
   useNavigation,
   useRevalidator,
 } from "@remix-run/react";
 import { useEffect, useState } from "react";
+import {
+  EmbeddedLink as Link,
+  useEmbeddedAppPath,
+} from "../components/EmbeddedLink";
 import {
   Page,
   Card,
@@ -162,6 +165,7 @@ export async function action({ request }: ActionFunctionArgs) {
   }
 }
 export default function Dashboard() {
+  const appPath = useEmbeddedAppPath();
   const {
     dashboard,
     subscription,
@@ -188,7 +192,10 @@ export default function Dashboard() {
     <Page
       title="SmartBill"
       subtitle="Capture invoices, review costs, and approve accurate supplier bills."
-      primaryAction={{ content: "Review invoices", url: "/app/invoices" }}
+      primaryAction={{
+        content: "Review invoices",
+        url: appPath("/app/invoices"),
+      }}
     >
       <BlockStack gap="500">
         {!subscription && (
@@ -197,7 +204,7 @@ export default function Dashboard() {
               Plans start at ${PLANS.STARTER.price} USD every 30 days. Choose a
               plan in Settings to start capturing invoices.
             </p>
-            <Button url="/app/settings">Choose a plan</Button>
+            <Button url={appPath("/app/settings")}>Choose a plan</Button>
           </Banner>
         )}
         {result && (
@@ -411,8 +418,10 @@ export default function Dashboard() {
             />
             {role === "ADMIN" && (
               <InlineStack gap="300">
-                <Button url="/app/reconciliation">Purchase orders</Button>
-                <Button url="/app/reports">Weekly report</Button>
+                <Button url={appPath("/app/reconciliation")}>
+                  Purchase orders
+                </Button>
+                <Button url={appPath("/app/reports")}>Weekly report</Button>
               </InlineStack>
             )}
           </BlockStack>

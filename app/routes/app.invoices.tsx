@@ -1,5 +1,10 @@
 import { json, type LoaderFunctionArgs } from "@remix-run/node";
-import { Form, Link, useLoaderData, useOutlet } from "@remix-run/react";
+import { Form, useLoaderData, useOutlet } from "@remix-run/react";
+import {
+  EmbeddedLink as Link,
+  EmbeddedNavigationFields,
+  useEmbeddedAppPath,
+} from "../components/EmbeddedLink";
 import {
   Page,
   Card,
@@ -59,6 +64,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   return json({ invoices, count, page, search, status, role, deleted });
 }
 export default function InvoiceQueue() {
+  const appPath = useEmbeddedAppPath();
   const data = useLoaderData<typeof loader>();
   const outlet = useOutlet();
   if (outlet) return outlet;
@@ -77,6 +83,7 @@ export default function InvoiceQueue() {
         )}
         <Card>
           <Form method="get">
+            <EmbeddedNavigationFields />
             <InlineStack gap="300">
               <label>
                 Search invoices or suppliers{" "}
@@ -128,10 +135,10 @@ export default function InvoiceQueue() {
             />
             <InlineStack gap="300">
               {data.page > 1 && (
-                <Button url={query(data.page - 1)}>Previous</Button>
+                <Button url={appPath(query(data.page - 1))}>Previous</Button>
               )}
               {data.page * 25 < data.count && (
-                <Button url={query(data.page + 1)}>Next</Button>
+                <Button url={appPath(query(data.page + 1))}>Next</Button>
               )}
             </InlineStack>
             {data.role === "ADMIN" && (

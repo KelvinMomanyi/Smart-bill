@@ -6,7 +6,11 @@ import {
   useRouteLoaderData,
 } from "@remix-run/react";
 import { boundary } from "@shopify/shopify-app-remix/server";
-import { shopDomain, shopifyAdminAppsUrl } from "../utils/shopifyNavigation";
+import {
+  shopDomain,
+  shopifyAdminAppsUrl,
+  shopifyAppPath,
+} from "../utils/shopifyNavigation";
 
 // No loader data or provider is needed: this also works when app startup fails.
 export function AppErrorState({
@@ -26,9 +30,7 @@ export function AppErrorState({
     shopDomain(app?.shop) ||
     shopDomain(new URLSearchParams(location.search).get("shop"));
   const adminUrl = shopifyAdminAppsUrl(shop);
-  const backUrl = shop
-    ? `${backTo}${backTo.includes("?") ? "&" : "?"}shop=${encodeURIComponent(shop)}`
-    : backTo;
+  const backUrl = shopifyAppPath(backTo, shop);
   return (
     <main
       style={{
