@@ -1,3 +1,4 @@
+import { merchantErrorMessage } from "../utils/merchantErrors";
 import {
   json,
   redirect,
@@ -90,7 +91,7 @@ export async function action({ request }: ActionFunctionArgs) {
   } catch (error) {
     if (error instanceof Response) throw error;
     return json(
-      { error: error instanceof Error ? error.message : "Retry failed." },
+      { error: merchantErrorMessage(error, "Retry failed.") },
       { status: 400 },
     );
   }

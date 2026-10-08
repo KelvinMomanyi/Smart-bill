@@ -5,7 +5,10 @@ import {
   Outlet,
   Scripts,
   ScrollRestoration,
+  isRouteErrorResponse,
+  useRouteError,
 } from "@remix-run/react";
+import { AppErrorState } from "./components/AppErrorState";
 
 export const links: LinksFunction = () => [
   {
@@ -28,9 +31,9 @@ export const links: LinksFunction = () => [
   { rel: "apple-touch-icon", href: "/apple-touch-icon.png", sizes: "180x180" },
 ];
 
-export default function App() {
+export function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <html>
+    <html lang="en">
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width,initial-scale=1" />
@@ -44,10 +47,30 @@ export default function App() {
         <Links />
       </head>
       <body>
-        <Outlet />
+        {children}
         <ScrollRestoration />
         <Scripts />
       </body>
     </html>
+  );
+}
+
+export default function App() {
+  return <Outlet />;
+}
+
+export function ErrorBoundary() {
+  const error = useRouteError();
+  const missing = isRouteErrorResponse(error) && error.status === 404;
+  return (
+    <AppErrorState
+      {...(missing
+        ? {
+            title: "Page not found",
+            message:
+              "This page may have moved. Return to SmartBill to continue.",
+          }
+        : {})}
+    />
   );
 }

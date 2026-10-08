@@ -1,3 +1,4 @@
+import { merchantErrorMessage } from "../utils/merchantErrors";
 import { randomUUID } from "node:crypto";
 import prisma from "../db.server";
 import type { Prisma } from "@prisma/client";
@@ -184,8 +185,8 @@ export async function createInvoiceXeroPurchaseTax(
       existing.length === 1
         ? existing[0].name + " already exists in Xero. Reload and select it."
         : "Xero already has multiple " +
-            rate.toFixed(2) +
-            "% purchase rates. Reload and choose the correct reporting rate manually.",
+          rate.toFixed(2) +
+          "% purchase rates. Reload and choose the correct reporting rate manually.",
     );
   const response = await createXeroPurchaseTaxRate(connection, rate);
   const created = response.TaxRates?.[0];
@@ -427,18 +428,17 @@ export async function exportApprovedInvoice({
       where: { id: entry.id, status: "SENDING", remoteId: null },
       data: {
         status: rejected ? "REJECTED" : "VERIFY",
-        error:
-          error instanceof Error
-            ? error.message
-            : "The bill export needs verification.",
+        error: merchantErrorMessage(
+          error,
+          "The bill export needs verification.",
+        ),
       },
     });
     await prisma.accountingExport.updateMany({
       where: { id: entry.id, status: "SENDING", remoteId: { not: null } },
       data: {
         status: "VERIFY",
-        error:
-          error instanceof Error ? error.message : "Verify the recorded bill.",
+        error: merchantErrorMessage(error, "Verify the recorded bill."),
       },
     });
     await notifySafely("EXPORT_FAILURE", shop, {
@@ -447,8 +447,7 @@ export async function exportApprovedInvoice({
       supplier: invoice.vendor?.name,
       amount: invoice.total,
       currency: invoice.currency,
-      message:
-        error instanceof Error ? error.message : `${platform} export failed`,
+      message: merchantErrorMessage(error, `${platform} export failed`),
     });
     throw error;
   }

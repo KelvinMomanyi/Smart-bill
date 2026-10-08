@@ -1,3 +1,4 @@
+import { merchantErrorMessage } from "../utils/merchantErrors";
 import { createHash, randomUUID } from "node:crypto";
 import prisma from "../db.server";
 import {
@@ -175,10 +176,10 @@ export async function completeBrowserInvoiceJob(input: {
         status: "FAILED",
         leaseToken: null,
         lockedAt: null,
-        error: (error instanceof Error
-          ? error.message
-          : "Unable to save OCR results."
-        ).slice(0, 500),
+        error: merchantErrorMessage(error, "Unable to save OCR results.").slice(
+          0,
+          500,
+        ),
       },
     });
     throw error;
@@ -222,14 +223,13 @@ export async function processNextInvoiceJob(shop?: string) {
       where: { shop: job.shop, documentHash: job.documentHash },
     });
     let invoiceId = existing?.id;
-    let creditNoteId =
-      invoiceId
-        ? undefined
-        : (
-            await prisma.creditNote.findFirst({
-              where: { shop: job.shop, documentHash: job.documentHash },
-            })
-          )?.id;
+    let creditNoteId = invoiceId
+      ? undefined
+      : (
+          await prisma.creditNote.findFirst({
+            where: { shop: job.shop, documentHash: job.documentHash },
+          })
+        )?.id;
     if (!invoiceId && !creditNoteId) {
       const document = await readInvoiceDocument(job.storageKey);
       const { extractTextFromDocument } = await import("../utils/ocr.server");
@@ -272,8 +272,7 @@ export async function processNextInvoiceJob(shop?: string) {
       },
     });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Document processing failed.";
+    const message = merchantErrorMessage(error, "Document processing failed.");
     const terminal =
       job.attempts + 1 >= 3 ||
       /limit|Duplicate|already captured|must contain|subscription|valid PDF|OCR timed out|OCR is selected|credential file is unavailable|credentials are not valid|Google Cloud Vision OCR failed/.test(

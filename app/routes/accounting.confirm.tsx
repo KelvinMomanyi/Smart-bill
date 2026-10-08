@@ -1,3 +1,4 @@
+import { merchantErrorMessage } from "../utils/merchantErrors";
 import {
   json,
   type ActionFunctionArgs,
@@ -16,6 +17,7 @@ import {
   authorizedBrowser,
   confirmAuthorization,
 } from "../services/accountingAuthorization.server";
+export { AccountingConnectionErrorBoundary as ErrorBoundary } from "../components/AppErrorState";
 export async function loader({ request }: LoaderFunctionArgs) {
   try {
     const id = new URL(request.url).searchParams.get("authorization") || "";
@@ -37,10 +39,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
       },
     );
   } catch (error) {
-    throw new Response(
-      error instanceof Error ? error.message : "Connection expired.",
-      { status: 400 },
-    );
+    throw new Response(merchantErrorMessage(error, "Connection expired."), {
+      status: 400,
+    });
   }
 }
 export async function action({ request }: ActionFunctionArgs) {
@@ -54,7 +55,7 @@ export async function action({ request }: ActionFunctionArgs) {
   } catch (error) {
     return json(
       {
-        error: error instanceof Error ? error.message : "Confirmation failed.",
+        error: merchantErrorMessage(error, "Confirmation failed."),
       },
       { status: 400 },
     );

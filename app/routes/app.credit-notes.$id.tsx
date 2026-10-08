@@ -1,3 +1,4 @@
+import { merchantErrorMessage } from "../utils/merchantErrors";
 import {
   json,
   type ActionFunctionArgs,
@@ -98,8 +99,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
           .map(([name, value]) => [name.slice(5), Number(value)]),
       );
       await setCreditNoteAllocation(request, id, method, manual);
-    }
-    else if (intent === "approve")
+    } else if (intent === "approve")
       await approveCreditNote(request, id, String(form.get("note") || ""));
     else if (intent === "void")
       await voidCreditNote(request, id, String(form.get("note") || ""));
@@ -116,7 +116,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
     return json(
       {
         success: false as const,
-        error: error instanceof Error ? error.message : "The action failed.",
+        error: merchantErrorMessage(error, "The action failed."),
       },
       { status: 400 },
     );
@@ -168,7 +168,8 @@ export default function CreditNoteDetail() {
               <Text as="p">
                 Matched to{" "}
                 <Link to={`/app/invoices/${credit.invoice.id}`}>
-                  {credit.invoice.invoiceNumber || credit.invoice.id.slice(0, 8)}
+                  {credit.invoice.invoiceNumber ||
+                    credit.invoice.id.slice(0, 8)}
                 </Link>
               </Text>
             ) : (
@@ -208,8 +209,8 @@ export default function CreditNoteDetail() {
               {applied.lines.map((line) => (
                 <Text as="p" key={line.id}>
                   {line.name}:{" "}
-                  {formatMoney(applied.byLine[line.id] || 0, credit.currency)} of{" "}
-                  {formatMoney(line.value, credit.currency)}
+                  {formatMoney(applied.byLine[line.id] || 0, credit.currency)}{" "}
+                  of {formatMoney(line.value, credit.currency)}
                 </Text>
               ))}
             </BlockStack>
@@ -257,7 +258,8 @@ export default function CreditNoteDetail() {
                         <option value="">Select an invoice</option>
                         {candidates.map((candidate) => (
                           <option key={candidate.id} value={candidate.id}>
-                            {candidate.invoiceNumber || candidate.id.slice(0, 8)}{" "}
+                            {candidate.invoiceNumber ||
+                              candidate.id.slice(0, 8)}{" "}
                             - {candidate.vendor?.name || "Unknown"} -{" "}
                             {formatMoney(candidate.total, candidate.currency)}
                           </option>
@@ -302,7 +304,9 @@ export default function CreditNoteDetail() {
                           credit.allocation as {
                             lines?: { lineId: string; amount: number }[];
                           } | null
-                        )?.lines?.find((line) => line.lineId === item.id)?.amount;
+                        )?.lines?.find(
+                          (line) => line.lineId === item.id,
+                        )?.amount;
                         return (
                           <label key={item.id}>
                             {item.name}{" "}
@@ -311,7 +315,9 @@ export default function CreditNoteDetail() {
                               type="number"
                               min={0}
                               step="0.01"
-                              defaultValue={saved ?? applied?.byLine[item.id] ?? 0}
+                              defaultValue={
+                                saved ?? applied?.byLine[item.id] ?? 0
+                              }
                             />
                           </label>
                         );
@@ -348,8 +354,7 @@ export default function CreditNoteDetail() {
                   <BlockStack gap="200">
                     <input type="hidden" name="intent" value="void" />
                     <label>
-                      Reason for voiding{" "}
-                      <input name="note" maxLength={200} />
+                      Reason for voiding <input name="note" maxLength={200} />
                     </label>
                     <Button submit tone="critical" loading={busy}>
                       Void credit note

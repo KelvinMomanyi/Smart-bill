@@ -31,10 +31,16 @@ export default function App() {
           COGS, and prepare accounting exports.
         </p>
         <div className={styles.launch}>
-          <a className={styles.button} href="https://admin.shopify.com/apps" target="_top">
-            Open Shopify admin
+          <a
+            className={styles.button}
+            href="https://admin.shopify.com/apps"
+            target="_top"
+          >
+            Choose your store in Shopify
           </a>
-          <p>Choose SmartBill from Apps in your Shopify admin to get started.</p>
+          <p>
+            Choose SmartBill from Apps in your Shopify admin to get started.
+          </p>
         </div>
         <ul className={styles.list}>
           <li>

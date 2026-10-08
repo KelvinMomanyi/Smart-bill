@@ -43,16 +43,7 @@ export async function accountingRequest<T = any>(
       false,
     );
   }
-  const faults =
-    body.Fault?.Error ||
-    body.Elements?.flatMap((e: any) => e.ValidationErrors || []) ||
-    [];
   if (!response.ok || body.Fault) {
-    const details = faults
-      .map((e: any) => e.Detail || e.Message)
-      .filter(Boolean)
-      .join(" ")
-      .slice(0, 600);
     const advice =
       body.error === "invalid_grant"
         ? "Authorization has expired or was revoked. Reconnect the accounting company in Settings."
@@ -64,12 +55,13 @@ export async function accountingRequest<T = any>(
               ? "Check the connection permissions and company subscription."
               : response.status === 429
                 ? `Request limit reached. Try again after ${response.headers.get("retry-after") || "60"} seconds.`
-                : details ||
-                  "Check the selected accounts, tax codes and bill fields.";
+                : response.status >= 500
+                  ? "The accounting service is temporarily unavailable. Check the export history before trying again."
+                  : "Check the selected supplier, accounts, tax codes and bill fields, then try again.";
     throw new AccountingApiError(
       provider,
       response.status,
-      `${provider}: ${advice} (HTTP ${response.status}).`,
+      `${provider}: ${advice}`,
       [400, 401, 403, 404, 422, 429].includes(response.status),
       typeof body.error === "string"
         ? body.error

@@ -1,3 +1,4 @@
+import { merchantErrorMessage } from "../utils/merchantErrors";
 import {
   json,
   redirect,
@@ -25,10 +26,7 @@ import {
 } from "@shopify/polaris";
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
-import {
-  getUserRole,
-  requireApprovalAccess,
-} from "../utils/rbac.server";
+import { getUserRole, requireApprovalAccess } from "../utils/rbac.server";
 import { invoiceIssues } from "../utils/invoiceRules";
 import { fxSummary, resolveFxRate } from "../utils/exchangeRate";
 import { creditTotals } from "../utils/creditNotes";
@@ -102,34 +100,41 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
   });
   if (!invoice) throw new Response("Invoice not found", { status: 404 });
   const shopCurrency = await fetchShopCurrency(admin);
-  const [role, purchaseOrders, events, fxOptions, approval, approvalStaff] = await Promise.all([
-    getUserRole(request),
-    prisma.purchaseOrder.findMany({
-      where: { shop: session.shop },
-      select: { id: true, poNumber: true },
-      take: 200,
-    }),
-    prisma.auditEvent.findMany({
-      where: { shop: session.shop, invoiceId: invoice.id },
-      orderBy: { createdAt: "desc" },
-      take: 30,
-    }),
-    invoice.currency === shopCurrency
-      ? Promise.resolve([])
-      : getExchangeRateOptions({
-          shop: session.shop,
-          fromCurrency: invoice.currency,
-          toCurrency: shopCurrency,
-          rateDate: invoice.date,
-          allowRemote: true,
-        }),
-    approvalState(prisma, invoice),
-    prisma.session.findMany({
-      where: { shop: session.shop, isOnline: true },
-      select: { id: true, firstName: true, email: true, role: true, accountOwner: true },
-      orderBy: { firstName: "asc" },
-    }),
-  ]);
+  const [role, purchaseOrders, events, fxOptions, approval, approvalStaff] =
+    await Promise.all([
+      getUserRole(request),
+      prisma.purchaseOrder.findMany({
+        where: { shop: session.shop },
+        select: { id: true, poNumber: true },
+        take: 200,
+      }),
+      prisma.auditEvent.findMany({
+        where: { shop: session.shop, invoiceId: invoice.id },
+        orderBy: { createdAt: "desc" },
+        take: 30,
+      }),
+      invoice.currency === shopCurrency
+        ? Promise.resolve([])
+        : getExchangeRateOptions({
+            shop: session.shop,
+            fromCurrency: invoice.currency,
+            toCurrency: shopCurrency,
+            rateDate: invoice.date,
+            allowRemote: true,
+          }),
+      approvalState(prisma, invoice),
+      prisma.session.findMany({
+        where: { shop: session.shop, isOnline: true },
+        select: {
+          id: true,
+          firstName: true,
+          email: true,
+          role: true,
+          accountOwner: true,
+        },
+        orderBy: { firstName: "asc" },
+      }),
+    ]);
   const landedCostMethod = isLandedCostMethod(invoice.landedCostMethod)
     ? invoice.landedCostMethod
     : "NONE";
@@ -155,9 +160,8 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
               POUNDS: 453.59237,
             }[String(weight?.unit || "").toUpperCase()];
             const quantity =
-              productLines.find(
-                (line) => line.shopifyVariantId === variant.id,
-              )?.quantity || 0;
+              productLines.find((line) => line.shopifyVariantId === variant.id)
+                ?.quantity || 0;
             return [
               variant.id,
               weight && multiplier
@@ -184,7 +188,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
           amount: item.amount,
           category: item.category,
           weight: item.shopifyVariantId
-            ? weights[item.shopifyVariantId] ?? null
+            ? (weights[item.shopifyVariantId] ?? null)
             : null,
         })),
         chargeTotal,
@@ -210,10 +214,10 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       };
     }
   } catch (error) {
-    landedCostError =
-      error instanceof Error
-        ? error.message
-        : "The freight allocation could not be calculated.";
+    landedCostError = merchantErrorMessage(
+      error,
+      "The freight allocation could not be calculated.",
+    );
   }
   const fx = resolveFxRate(invoice.currency, shopCurrency, invoice.fxRate);
   const credits = creditTotals(invoice.creditNotes);
@@ -334,7 +338,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
     return json(
       {
         success: false as const,
-        error: error instanceof Error ? error.message : "The action failed.",
+        error: merchantErrorMessage(error, "The action failed."),
       },
       { status: 400 },
     );
@@ -452,7 +456,13 @@ function OriginalDocument({
         setDocument({ url: objectUrl, type: blob.type });
       })
       .catch((error) => {
-        if (!controller.signal.aborted) setError(error.message);
+        if (!controller.signal.aborted)
+          setError(
+            merchantErrorMessage(
+              error,
+              "The original document couldn't be loaded. Please retry.",
+            ),
+          );
       });
     return () => {
       controller.abort();
@@ -569,7 +579,8 @@ function InvoiceEditor({
   const productLines = items.filter((item) => item.category === "PRODUCT");
   const chargeTotal = chargeLines.reduce(
     (sum, item) =>
-      sum + (Number(item.amount) || Number(item.quantity) * Number(item.price) || 0),
+      sum +
+      (Number(item.amount) || Number(item.quantity) * Number(item.price) || 0),
     0,
   );
   return (
@@ -826,7 +837,8 @@ function InvoiceEditor({
                           </label>
                           {needsPackSize(item.supplierUoM) && (
                             <label>
-                              Stock units per {item.supplierUoM || "billed unit"}{" "}
+                              Stock units per{" "}
+                              {item.supplierUoM || "billed unit"}{" "}
                               <input
                                 type="number"
                                 step="any"
@@ -1247,7 +1259,9 @@ function InvoiceEditor({
               </>
             )}
             <InlineStack gap="200">
-              <Button url="/app/credit-notes">Record or match a credit note</Button>
+              <Button url="/app/credit-notes">
+                Record or match a credit note
+              </Button>
             </InlineStack>
           </BlockStack>
         </Card>
@@ -1270,9 +1284,7 @@ function InvoiceEditor({
               const eligible = roleCanApprove(role, ruleRoles(rule));
               const delegates = approvalStaff.filter((staff) =>
                 roleCanApprove(
-                  staff.accountOwner
-                    ? "ADMIN"
-                    : normalizeStaffRole(staff.role),
+                  staff.accountOwner ? "ADMIN" : normalizeStaffRole(staff.role),
                   ruleRoles(rule),
                 ),
               );
@@ -1419,7 +1431,10 @@ function InvoiceEditor({
                   </Text>
                   {c.error && (
                     <Text as="p" tone="critical">
-                      {c.error}
+                      {merchantErrorMessage(
+                        c.error,
+                        "This cost update needs review before retrying.",
+                      )}
                     </Text>
                   )}
                   {role === "ADMIN" &&
@@ -1470,7 +1485,10 @@ function InvoiceEditor({
                   </Text>
                   {e.error && (
                     <Text as="p" tone="critical">
-                      {e.error}
+                      {merchantErrorMessage(
+                        e.error,
+                        "This export needs review. Check its status before retrying.",
+                      )}
                     </Text>
                   )}
                   {e.companyKey && (

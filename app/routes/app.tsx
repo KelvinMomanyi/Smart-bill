@@ -1,5 +1,11 @@
 import type { HeadersFunction, LoaderFunctionArgs } from "@remix-run/node";
-import { Link, Outlet, useLoaderData, useRouteError } from "@remix-run/react";
+import {
+  Link,
+  Outlet,
+  isRouteErrorResponse,
+  useLoaderData,
+  useRouteError,
+} from "@remix-run/react";
 import { boundary } from "@shopify/shopify-app-remix/server";
 import { AppProvider } from "@shopify/shopify-app-remix/react";
 import { NavMenu } from "@shopify/app-bridge-react";
@@ -8,6 +14,7 @@ import formStyles from "../styles/forms.css?url";
 
 import { IntuitTrademarkNotice } from "../components/IntuitTrademarkNotice";
 import { SmartBillBrand } from "../components/SmartBillBrand";
+import { AppErrorState } from "../components/AppErrorState";
 import { authenticate } from "../shopify.server";
 import { getUserRole } from "../utils/rbac.server";
 
@@ -17,11 +24,12 @@ export const links = () => [
 ];
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
   const role = await getUserRole(request);
 
   return {
     apiKey: process.env.SHOPIFY_API_KEY || "",
+    shop: session.shop,
     role,
   };
 };
@@ -63,7 +71,33 @@ export default function App() {
 
 // Shopify needs Remix to catch some thrown responses, so that their headers are included in the response.
 export function ErrorBoundary() {
-  return boundary.error(useRouteError());
+  const error = useRouteError();
+  // The SDK throws a successful HTML response to escape the iframe for auth
+  // and billing redirects. Preserve that protocol and Shopify's headers.
+  if (isRouteErrorResponse(error) && error.status === 200)
+    return boundary.error(error);
+  if (isRouteErrorResponse(error) && error.status === 401)
+    return (
+      <AppErrorState
+        title="Your session needs refreshing"
+        message="Reopen SmartBill from Apps in Shopify admin, then try again."
+      />
+    );
+  if (isRouteErrorResponse(error) && error.status === 403)
+    return (
+      <AppErrorState
+        title="Access required"
+        message="Ask your store owner to grant access to this part of SmartBill."
+      />
+    );
+  if (isRouteErrorResponse(error) && error.status === 404)
+    return (
+      <AppErrorState
+        title="Page not found"
+        message="Return to SmartBill to continue."
+      />
+    );
+  return <AppErrorState />;
 }
 
 export const headers: HeadersFunction = (headersArgs) => {

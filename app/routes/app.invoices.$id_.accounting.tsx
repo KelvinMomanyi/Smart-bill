@@ -1,3 +1,4 @@
+import { merchantErrorMessage } from "../utils/merchantErrors";
 import {
   json,
   type LoaderFunctionArgs,
@@ -52,7 +53,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       platform,
       settings,
       catalog: null,
-      error: error instanceof Error ? error.message : "Connection unavailable.",
+      error: merchantErrorMessage(error, "Connection unavailable."),
     });
   }
 }
@@ -60,10 +61,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
   try {
     const form = await request.formData();
     if (form.get("intent") === "create-xero-tax") {
-      const tax = await createInvoiceXeroPurchaseTax(
-        request,
-        params.id || "",
-      );
+      const tax = await createInvoiceXeroPurchaseTax(request, params.id || "");
       return json({
         success: true as const,
         message:
@@ -88,10 +86,10 @@ export async function action({ request, params }: ActionFunctionArgs) {
     return json(
       {
         success: false as const,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Could not save accounting choices.",
+        error: merchantErrorMessage(
+          error,
+          "Could not save accounting choices.",
+        ),
       },
       { status: 400 },
     );
@@ -153,23 +151,21 @@ export default function InvoiceAccountingDetails() {
             {xeroNeedsTaxSetup && (
               <Card>
                 <Form method="post">
-                  <input
-                    type="hidden"
-                    name="intent"
-                    value="create-xero-tax"
-                  />
+                  <input type="hidden" name="intent" value="create-xero-tax" />
                   <input type="hidden" name="platform" value="XERO" />
                   <BlockStack gap="300">
                     <Banner tone="warning">
                       SmartBill detected a{" "}
-                      {(detectedTaxRate ?? invoiceEffectiveTaxRate).toFixed(2)}
-                      % purchase tax rate, but Xero has no unique matching
+                      {(detectedTaxRate ?? invoiceEffectiveTaxRate).toFixed(2)}%
+                      purchase tax rate, but Xero has no unique matching
                       purchase TaxType for this invoice.
                     </Banner>
                     {canCreateXeroTax && (
                       <Button submit loading={busy} disabled={locked}>
                         Create{" "}
-                        {(detectedTaxRate ?? invoiceEffectiveTaxRate).toFixed(2)}
+                        {(detectedTaxRate ?? invoiceEffectiveTaxRate).toFixed(
+                          2,
+                        )}
                         % purchase tax in Xero
                       </Button>
                     )}
@@ -178,132 +174,133 @@ export default function InvoiceAccountingDetails() {
               </Card>
             )}
             <Card>
-            <Form method="post">
-              <input type="hidden" name="intent" value="save" />
-              <input type="hidden" name="platform" value={platform} />
-              <input type="hidden" name="revision" value={invoice.revision} />
-              <BlockStack gap="400">
-                <Text as="p">
-                  Company: {catalog.companyName}. Invoice{" "}
-                  {invoice.invoiceNumber}: {invoice.currency}{" "}
-                  {invoice.total.toFixed(2)}, including{" "}
-                  {Number(invoice.tax || 0).toFixed(2)} tax.
-                </Text>
-                {locked && (
-                  <Banner tone="info">
-                    These choices are locked because an export has started or
-                    completed.
-                  </Banner>
-                )}
-                <Text as="p">
-                  Choose the purchase account and tax for each net line amount.
-                  Tax codes must reproduce the approved invoice&apos;s tax
-                  total.
-                </Text>
-                {suggestedXeroTax && Number(invoice.tax || 0) > 0 && (
-                  <Banner tone="info">
-                    SmartBill matched the invoice tax to{" "}
-                    {suggestedXeroTax.name} ({suggestedXeroTax.rate.toFixed(2)}
-                    %) in Xero and preselected it for each line. Review any
-                    exempt or differently taxed lines before saving.
-                  </Banner>
-                )}
-                {us && (
+              <Form method="post">
+                <input type="hidden" name="intent" value="save" />
+                <input type="hidden" name="platform" value={platform} />
+                <input type="hidden" name="revision" value={invoice.revision} />
+                <BlockStack gap="400">
                   <Text as="p">
-                    US purchase sales tax uses the separate expense account
-                    selected in Settings.
+                    Company: {catalog.companyName}. Invoice{" "}
+                    {invoice.invoiceNumber}: {invoice.currency}{" "}
+                    {invoice.total.toFixed(2)}, including{" "}
+                    {Number(invoice.tax || 0).toFixed(2)} tax.
                   </Text>
-                )}
-                {invoice.items.map((item) => {
-                  const line = matching?.lines.find(
-                    (l) => l.itemId === item.id,
-                  );
-                  return (
-                    <fieldset key={item.id} disabled={locked || busy}>
-                      <legend>
-                        {item.name} —{" "}
-                        {Number(
-                          item.amount ?? item.price * item.quantity,
-                        ).toFixed(2)}{" "}
-                        {invoice.currency}
-                      </legend>
-                      <label>
-                        Purchase account{" "}
-                        <select
-                          name={`account-${item.id}`}
-                          required
-                          defaultValue={
-                            line?.accountId ||
-                            (platform === "XERO"
-                              ? settings?.xeroAccountCode
-                              : settings?.quickBooksAccountId) ||
-                            ""
-                          }
-                        >
-                          <option value="">Choose account</option>
-                          {catalog.accounts.map((a) => (
-                            <option key={a.id} value={a.id}>
-                              {a.name} ({a.id})
-                            </option>
-                          ))}
-                        </select>
-                      </label>{" "}
-                      {!us && (
+                  {locked && (
+                    <Banner tone="info">
+                      These choices are locked because an export has started or
+                      completed.
+                    </Banner>
+                  )}
+                  <Text as="p">
+                    Choose the purchase account and tax for each net line
+                    amount. Tax codes must reproduce the approved invoice&apos;s
+                    tax total.
+                  </Text>
+                  {suggestedXeroTax && Number(invoice.tax || 0) > 0 && (
+                    <Banner tone="info">
+                      SmartBill matched the invoice tax to{" "}
+                      {suggestedXeroTax.name} (
+                      {suggestedXeroTax.rate.toFixed(2)}
+                      %) in Xero and preselected it for each line. Review any
+                      exempt or differently taxed lines before saving.
+                    </Banner>
+                  )}
+                  {us && (
+                    <Text as="p">
+                      US purchase sales tax uses the separate expense account
+                      selected in Settings.
+                    </Text>
+                  )}
+                  {invoice.items.map((item) => {
+                    const line = matching?.lines.find(
+                      (l) => l.itemId === item.id,
+                    );
+                    return (
+                      <fieldset key={item.id} disabled={locked || busy}>
+                        <legend>
+                          {item.name} —{" "}
+                          {Number(
+                            item.amount ?? item.price * item.quantity,
+                          ).toFixed(2)}{" "}
+                          {invoice.currency}
+                        </legend>
                         <label>
-                          Purchase tax{" "}
+                          Purchase account{" "}
                           <select
-                            name={`tax-${item.id}`}
+                            name={`account-${item.id}`}
                             required
                             defaultValue={
-                              line?.taxCodeId ||
-                              suggestedXeroTax?.id ||
+                              line?.accountId ||
                               (platform === "XERO"
-                                ? settings?.xeroTaxType
-                                : settings?.quickBooksTaxCodeId) ||
+                                ? settings?.xeroAccountCode
+                                : settings?.quickBooksAccountId) ||
                               ""
                             }
                           >
-                            <option value="">Choose tax</option>
-                            {catalog.taxes.map((t) => (
-                              <option key={t.id} value={t.id}>
-                                {t.name} — {t.rate.toFixed(2)}% ({t.id})
+                            <option value="">Choose account</option>
+                            {catalog.accounts.map((a) => (
+                              <option key={a.id} value={a.id}>
+                                {a.name} ({a.id})
                               </option>
                             ))}
                           </select>
-                        </label>
-                      )}
-                    </fieldset>
-                  );
-                })}
-                {invoice.currency !== catalog.homeCurrency && (
-                  <label>
-                    Exchange rate: 1 {invoice.currency} equals{" "}
-                    <input
-                      name="exchangeRate"
-                      type="number"
-                      min="0.000001"
-                      step="any"
-                      required
-                      defaultValue={
-                        matching?.exchangeRate || invoice.fxRate || ""
-                      }
-                      disabled={locked || busy}
-                    />{" "}
-                    {catalog.homeCurrency}
-                  </label>
-                )}
-                <Text as="p">
-                  Xero bills are created as drafts for review in Xero.
-                  QuickBooks creates an unpaid supplier bill.
-                </Text>
-                <Button submit loading={busy} disabled={locked}>
-                  Save accounting choices
-                </Button>
-                <Button url={`/app/invoices/${invoice.id}`}>
-                  Return to invoice to export
-                </Button>
-              </BlockStack>
-            </Form>
+                        </label>{" "}
+                        {!us && (
+                          <label>
+                            Purchase tax{" "}
+                            <select
+                              name={`tax-${item.id}`}
+                              required
+                              defaultValue={
+                                line?.taxCodeId ||
+                                suggestedXeroTax?.id ||
+                                (platform === "XERO"
+                                  ? settings?.xeroTaxType
+                                  : settings?.quickBooksTaxCodeId) ||
+                                ""
+                              }
+                            >
+                              <option value="">Choose tax</option>
+                              {catalog.taxes.map((t) => (
+                                <option key={t.id} value={t.id}>
+                                  {t.name} — {t.rate.toFixed(2)}% ({t.id})
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        )}
+                      </fieldset>
+                    );
+                  })}
+                  {invoice.currency !== catalog.homeCurrency && (
+                    <label>
+                      Exchange rate: 1 {invoice.currency} equals{" "}
+                      <input
+                        name="exchangeRate"
+                        type="number"
+                        min="0.000001"
+                        step="any"
+                        required
+                        defaultValue={
+                          matching?.exchangeRate || invoice.fxRate || ""
+                        }
+                        disabled={locked || busy}
+                      />{" "}
+                      {catalog.homeCurrency}
+                    </label>
+                  )}
+                  <Text as="p">
+                    Xero bills are created as drafts for review in Xero.
+                    QuickBooks creates an unpaid supplier bill.
+                  </Text>
+                  <Button submit loading={busy} disabled={locked}>
+                    Save accounting choices
+                  </Button>
+                  <Button url={`/app/invoices/${invoice.id}`}>
+                    Return to invoice to export
+                  </Button>
+                </BlockStack>
+              </Form>
             </Card>
           </>
         )}

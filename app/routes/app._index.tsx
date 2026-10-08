@@ -1,3 +1,4 @@
+import { merchantErrorMessage } from "../utils/merchantErrors";
 import {
   json,
   type LoaderFunctionArgs,
@@ -129,7 +130,7 @@ export async function action({ request }: ActionFunctionArgs) {
           accepted++;
         } catch (error) {
           messages.push(
-            `${file.name}: ${error instanceof Error ? error.message : "Upload failed"}`,
+            `${file.name}: ${merchantErrorMessage(error, "Upload failed")}`,
           );
         }
       }
@@ -154,7 +155,7 @@ export async function action({ request }: ActionFunctionArgs) {
     return json(
       {
         success: false as const,
-        error: error instanceof Error ? error.message : "Capture failed.",
+        error: merchantErrorMessage(error, "Capture failed."),
       },
       { status: 400 },
     );
@@ -290,9 +291,9 @@ export default function Dashboard() {
                   />
                 </label>
                 <Text as="p" tone="subdued">
-                  PDFs and images, up to 10 MB and 10 pages each. Growth supports
-                  batches of up to 10 documents. Recognition runs on your
-                  device; keep this page open until saving completes.
+                  PDFs and images, up to 10 MB and 10 pages each. Growth
+                  supports batches of up to 10 documents. Recognition runs on
+                  your device; keep this page open until saving completes.
                 </Text>
                 <Text as="p" tone="subdued">
                   This host accepts up to {uploadLimitMb} MB total per upload
@@ -358,7 +359,10 @@ export default function Dashboard() {
                   </Text>
                   {job.error && (
                     <Text as="p" tone="critical">
-                      {job.error}
+                      {merchantErrorMessage(
+                        job.error,
+                        "This document couldn't be processed. Retry or enter the invoice text manually.",
+                      )}
                     </Text>
                   )}
                   {job.invoiceId && (

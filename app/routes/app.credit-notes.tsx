@@ -1,3 +1,4 @@
+import { merchantErrorMessage } from "../utils/merchantErrors";
 import {
   json,
   type ActionFunctionArgs,
@@ -46,7 +47,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
       shop: session.shop,
       ...(isCreditNoteStatus(status) ? { status } : {}),
     },
-    include: { vendor: true, invoice: { select: { id: true, invoiceNumber: true } } },
+    include: {
+      vendor: true,
+      invoice: { select: { id: true, invoiceNumber: true } },
+    },
     orderBy: { createdAt: "desc" },
     take: 200,
   });
@@ -83,7 +87,7 @@ export async function action({ request }: ActionFunctionArgs) {
     return json(
       {
         success: false as const,
-        error: error instanceof Error ? error.message : "The action failed.",
+        error: merchantErrorMessage(error, "The action failed."),
       },
       { status: 400 },
     );
@@ -223,7 +227,10 @@ export default function CreditNotes() {
                 credit.vendor?.name || "Unknown",
                 formatMoney(credit.amount, credit.currency),
                 credit.invoice ? (
-                  <Link key={credit.id} to={`/app/invoices/${credit.invoice.id}`}>
+                  <Link
+                    key={credit.id}
+                    to={`/app/invoices/${credit.invoice.id}`}
+                  >
                     {credit.invoice.invoiceNumber || "Open invoice"}
                   </Link>
                 ) : (

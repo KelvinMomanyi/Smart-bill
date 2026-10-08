@@ -23,123 +23,132 @@ import {
   Text,
   TextField,
 } from "@shopify/polaris";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { randomUUID } from "node:crypto";
+import type { Prisma } from "@prisma/client";
 import prisma from "../db.server";
-import { requireSubscription } from "../services/billing.server";
-import { getShopSettings } from "../services/invoiceWorkflow.server";
+import { subscriptionFor } from "../services/billing.server";
+import {
+  createPurchaseOrder,
+  purchaseOrderInput,
+  PurchaseOrderInputError,
+} from "../services/purchaseOrders.server";
 import { formatMoney } from "../utils/format";
-import { validDate } from "../utils/invoiceRules";
-import { parsePoItems, parseStructuredPoItems } from "../utils/poItems.server";
+import { parsePoItems } from "../utils/poItems";
+import {
+  emptyPoRow,
+  readPoFormValues,
+  type PoFormRow,
+  type PoFieldErrors,
+} from "../utils/purchaseOrderForm";
 import { requireAdmin } from "../utils/rbac.server";
+
+type PoLoaderData = {
+  purchaseOrders: Prisma.PurchaseOrderGetPayload<{
+    include: {
+      vendor: true;
+      items: true;
+      linkedInvoices: { include: { items: true } };
+    };
+  }>[];
+  loadError: string | null;
+  submissionId: string;
+};
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await requireAdmin(request);
   const shop = session.shop;
 
-  const purchaseOrders = await prisma.purchaseOrder.findMany({
-    where: { shop },
-    include: {
-      vendor: true,
-      items: true,
-      linkedInvoices: { include: { items: true } },
-    },
-    orderBy: { updatedAt: "desc" },
-    take: 100,
-  });
+  try {
+    const purchaseOrders = await prisma.purchaseOrder.findMany({
+      where: { shop },
+      include: {
+        vendor: true,
+        items: true,
+        linkedInvoices: { include: { items: true } },
+      },
+      orderBy: { updatedAt: "desc" },
+      take: 100,
+    });
 
-  return json({ purchaseOrders });
+    return json<PoLoaderData>({
+      purchaseOrders,
+      loadError: null,
+      submissionId: randomUUID(),
+    });
+  } catch (error) {
+    logPoError(shop, error);
+    return json<PoLoaderData>({
+      purchaseOrders: [],
+      submissionId: randomUUID(),
+      loadError:
+        "Purchase orders could not be loaded. Please retry. Your saved orders have not been changed.",
+    });
+  }
 };
 
+function logPoError(shop: string, error: unknown) {
+  const reference = randomUUID();
+  console.error("Purchase order operation failed", {
+    shop,
+    reference,
+    code:
+      error && typeof error === "object" && "code" in error
+        ? error.code
+        : "UNKNOWN",
+    type: error instanceof Error ? error.name : "UnknownError",
+  });
+  return reference;
+}
+
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await requireAdmin(request);
-  const formData = await request.formData();
-  const intent = String(formData.get("intent") || "");
+  const { session, admin } = await requireAdmin(request);
   const shop = session.shop;
-
+  let formData = new FormData();
+  const failure = (
+    error: string,
+    fieldErrors: PoFieldErrors = {},
+    settingsRequired = false,
+  ) =>
+    json({
+      success: false as const,
+      error,
+      fieldErrors,
+      settingsRequired,
+      values: readPoFormValues(formData),
+    });
   try {
-    await requireSubscription(request);
-    if (intent === "create-po") {
-      const vendorName = String(formData.get("vendorName") || "").trim();
-      const poNumber = String(formData.get("poNumber") || "").trim();
-      const expectedDate = String(formData.get("expectedDate") || "").trim();
-      const notes = String(formData.get("notes") || "").trim();
-      const itemRows = String(formData.get("itemRows") || "");
-      const structuredItems = String(formData.get("structuredItems") || "");
-      const items = parseStructuredPoItems(structuredItems);
-      const fallbackItems = items.length > 0 ? items : parsePoItems(itemRows);
-
-      if (!vendorName) throw new Error("Vendor name is required");
-      if (vendorName.length > 200)
-        throw new Error("Vendor name must be 200 characters or fewer.");
-      if (poNumber.length > 100)
-        throw new Error("Purchase order number must be 100 characters or fewer.");
-      if (notes.length > 2_000)
-        throw new Error("Purchase order notes must be 2,000 characters or fewer.");
-      if (expectedDate && !validDate(expectedDate))
-        throw new Error("Enter a valid expected delivery date.");
-      if (fallbackItems.length === 0)
-        throw new Error("Add at least one PO item");
-      if (fallbackItems.length > 200)
-        throw new Error("A purchase order can contain at most 200 items.");
-
-      const vendor = await prisma.vendor.upsert({
-        where: { shop_name: { shop, name: vendorName } },
-        update: {},
-        create: { shop, name: vendorName },
-      });
-
-      const totalAmount = fallbackItems.reduce(
-        (sum, item) => sum + (item.expectedRate || 0) * item.expectedQty,
-        0,
-      );
-
-      await prisma.purchaseOrder.create({
-        data: {
-          shop,
-          currency: (await getShopSettings(shop)).defaultCurrency,
-          vendorId: vendor.id,
-          poNumber: poNumber || null,
-          expectedDate: expectedDate ? new Date(expectedDate) : null,
-          notes: notes || null,
-          totalAmount,
-          status: "OPEN",
-          items: {
-            create: fallbackItems.map((item) => ({
-              sku: item.sku || null,
-              shopifyProductId: item.shopifyProductId || null,
-              shopifyVariantId: item.shopifyVariantId || null,
-              name: item.name,
-              expectedQty: item.expectedQty,
-              expectedRate: item.expectedRate ?? null,
-            })),
-          },
-        },
-      });
-
-      return json({
-        success: true as const,
-        message: "Purchase order created",
-      });
-    }
-
-    if (intent === "close-po") {
-      throw new Error(
+    formData = await request.formData();
+    const intent = String(formData.get("intent") || "");
+    if (intent === "close-po")
+      return failure(
         "Record the physical delivery using Receive stock. An invoice cannot confirm a delivery.",
       );
-    }
-
-    return json(
-      { success: false as const, error: "Unknown action" },
-      { status: 400 },
-    );
+    if (intent !== "create-po")
+      return failure("Choose Create purchase order to submit this form.");
+    const input = purchaseOrderInput(formData);
+    const subscription = await subscriptionFor(admin);
+    if (!subscription)
+      return failure(
+        "Choose a Starter or Growth subscription in Settings, then return to create your purchase order. Your entries are kept here.",
+        {},
+        true,
+      );
+    const purchaseOrder = await createPurchaseOrder(shop, input);
+    return json({
+      success: true as const,
+      message: "Purchase order created",
+      purchaseOrderId: purchaseOrder.id,
+      purchaseOrderNumber: purchaseOrder.poNumber,
+    });
   } catch (error) {
+    // Preserve Shopify's authentication and session-token responses.
     if (error instanceof Response) throw error;
-    return json(
-      {
-        success: false as const,
-        error: error instanceof Error ? error.message : String(error),
-      },
-      { status: 400 },
+    if (error instanceof PurchaseOrderInputError)
+      return failure(error.message, { [error.field]: error.message });
+    const reference = logPoError(shop, error);
+    return failure(
+      `We couldn't save this purchase order. Your entries are kept here. Please try again; if the problem continues, contact support with reference ${reference}.`,
     );
   }
 };
@@ -151,61 +160,44 @@ function statusTone(status: string) {
   return "info";
 }
 
-type PoFormRow = {
-  sku: string;
-  name: string;
-  quantity: string;
-  rate: string;
-};
-
-function emptyPoRow(): PoFormRow {
-  return { sku: "", name: "", quantity: "1", rate: "" };
-}
-
-function parseClientBulkRows(text: string): PoFormRow[] {
-  return text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const parts = line.includes("|") ? line.split("|") : line.split(",");
-      if (parts.length >= 3) {
-        const [nameOrSku, quantity, rate] = parts.map((part) => part.trim());
-        const skuMatch = nameOrSku.match(/^([A-Z0-9._-]{3,})\s+(.+)$/);
-        return {
-          sku: skuMatch?.[1] || "",
-          name: skuMatch?.[2] || nameOrSku,
-          quantity: quantity || "1",
-          rate: rate || "",
-        };
-      }
-
-      return null;
-    })
-    .filter((item): item is PoFormRow => Boolean(item?.name));
-}
-
 export default function PurchaseOrders() {
-  const { purchaseOrders } = useLoaderData<typeof loader>();
+  const { purchaseOrders, loadError, submissionId } =
+    useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
-  const [vendorName, setVendorName] = useState("");
-  const [poNumber, setPoNumber] = useState("");
-  const [expectedDate, setExpectedDate] = useState("");
-  const [notes, setNotes] = useState("");
-  const [itemRows, setItemRows] = useState("");
-  const [items, setItems] = useState<PoFormRow[]>([emptyPoRow()]);
-  const isSubmitting = navigation.state === "submitting";
-  const structuredItems = JSON.stringify(
-    items
-      .filter((item) => item.name.trim())
-      .map((item) => ({
-        sku: item.sku.trim(),
-        name: item.name.trim(),
-        expectedQty: item.quantity,
-        expectedRate: item.rate,
-      })),
+  const submittedValues =
+    actionData && !actionData.success ? actionData.values : undefined;
+  const fieldErrors =
+    actionData && !actionData.success ? actionData.fieldErrors : {};
+  const [vendorName, setVendorName] = useState(
+    submittedValues?.vendorName || "",
   );
+  const [poNumber, setPoNumber] = useState(submittedValues?.poNumber || "");
+  const [expectedDate, setExpectedDate] = useState(
+    submittedValues?.expectedDate || "",
+  );
+  const [notes, setNotes] = useState(submittedValues?.notes || "");
+  const [itemRows, setItemRows] = useState(submittedValues?.itemRows || "");
+  const [items, setItems] = useState<PoFormRow[]>(
+    submittedValues?.items || [emptyPoRow()],
+  );
+  const [bulkError, setBulkError] = useState<string>();
+  const isSubmitting = navigation.state !== "idle";
+  const submitting = useRef(false);
+  useEffect(() => {
+    if (navigation.state === "idle") submitting.current = false;
+  }, [navigation.state, actionData]);
+
+  useEffect(() => {
+    if (!actionData?.success) return;
+    setVendorName("");
+    setPoNumber("");
+    setExpectedDate("");
+    setNotes("");
+    setItemRows("");
+    setItems([emptyPoRow()]);
+    setBulkError(undefined);
+  }, [actionData]);
 
   const updateItem = (index: number, field: keyof PoFormRow, value: string) => {
     setItems((currentItems) =>
@@ -224,8 +216,24 @@ export default function PurchaseOrders() {
         : currentItems.filter((_, itemIndex) => itemIndex !== index),
     );
   const importBulkRows = () => {
-    const parsed = parseClientBulkRows(itemRows);
-    if (parsed.length > 0) setItems(parsed);
+    try {
+      const parsed = parsePoItems(itemRows);
+      if (!parsed.length) throw new Error("Paste at least one item row.");
+      setItems(
+        parsed.map((item) => ({
+          sku: item.sku || "",
+          name: item.name,
+          quantity: String(item.expectedQty),
+          rate: item.expectedRate == null ? "" : String(item.expectedRate),
+        })),
+      );
+      setBulkError(undefined);
+      setItemRows("");
+    } catch (error) {
+      setBulkError(
+        error instanceof Error ? error.message : "Check the pasted rows.",
+      );
+    }
   };
 
   const rows = purchaseOrders.map((po) => {
@@ -263,12 +271,30 @@ export default function PurchaseOrders() {
       <BlockStack gap="500">
         {actionData?.success && (
           <Banner tone="success" title={actionData.message}>
-            <p>The purchase order workspace is up to date.</p>
+            <p>
+              <Link to={`/app/receipts/${actionData.purchaseOrderId}`}>
+                Open {actionData.purchaseOrderNumber || "purchase order"} and
+                receive stock
+              </Link>
+              .
+            </p>
           </Banner>
         )}
         {actionData && !actionData.success && (
           <Banner tone="critical" title="Purchase order action failed">
             <p>{actionData.error}</p>
+            {actionData.settingsRequired && (
+              <Link to="/app/settings">Choose a plan in Settings</Link>
+            )}
+          </Banner>
+        )}
+        {loadError && (
+          <Banner
+            tone="critical"
+            title="Purchase orders unavailable"
+            action={{ content: "Retry loading", url: "/app/reconciliation" }}
+          >
+            {loadError}
           </Banner>
         )}
 
@@ -314,13 +340,18 @@ export default function PurchaseOrders() {
         <Layout>
           <Layout.Section>
             <Card>
-              <Form method="post">
+              <Form
+                method="post"
+                onSubmit={(event) => {
+                  if (submitting.current) {
+                    event.preventDefault();
+                    return;
+                  }
+                  submitting.current = true;
+                }}
+              >
                 <input type="hidden" name="intent" value="create-po" />
-                <input
-                  type="hidden"
-                  name="structuredItems"
-                  value={structuredItems}
-                />
+                <input type="hidden" name="submissionId" value={submissionId} />
                 <BlockStack gap="400">
                   <Text as="h2" variant="headingMd">
                     Create purchase order
@@ -331,6 +362,9 @@ export default function PurchaseOrders() {
                     value={vendorName}
                     onChange={setVendorName}
                     autoComplete="off"
+                    maxLength={200}
+                    requiredIndicator
+                    error={fieldErrors.vendorName}
                   />
                   <InlineStack gap="300" blockAlign="start">
                     <div style={{ flex: 1 }}>
@@ -340,6 +374,8 @@ export default function PurchaseOrders() {
                         value={poNumber}
                         onChange={setPoNumber}
                         autoComplete="off"
+                        maxLength={100}
+                        error={fieldErrors.poNumber}
                       />
                     </div>
                     <div style={{ flex: 1 }}>
@@ -350,6 +386,7 @@ export default function PurchaseOrders() {
                         value={expectedDate}
                         onChange={setExpectedDate}
                         autoComplete="off"
+                        error={fieldErrors.expectedDate}
                       />
                     </div>
                   </InlineStack>
@@ -357,6 +394,11 @@ export default function PurchaseOrders() {
                     <Text as="h3" variant="headingSm">
                       Line items
                     </Text>
+                    {fieldErrors.items && (
+                      <Text as="p" tone="critical">
+                        {fieldErrors.items}
+                      </Text>
+                    )}
                     {items.map((item, index) => (
                       <div
                         key={index}
@@ -369,34 +411,48 @@ export default function PurchaseOrders() {
                         }}
                       >
                         <TextField
-                          label={index === 0 ? "SKU" : ""}
+                          label="SKU (optional)"
+                          labelHidden={index > 0}
+                          name="itemSku"
+                          maxLength={200}
                           value={item.sku}
                           onChange={(value) => updateItem(index, "sku", value)}
                           autoComplete="off"
                         />
                         <TextField
-                          label={index === 0 ? "Item name" : ""}
+                          label="Item name"
+                          labelHidden={index > 0}
+                          requiredIndicator
+                          name="itemName"
+                          maxLength={500}
                           value={item.name}
                           onChange={(value) => updateItem(index, "name", value)}
                           autoComplete="off"
                         />
                         <TextField
-                          label={index === 0 ? "Qty" : ""}
+                          label="Qty"
+                          labelHidden={index > 0}
+                          requiredIndicator
+                          name="itemQuantity"
                           value={item.quantity}
                           onChange={(value) =>
                             updateItem(index, "quantity", value)
                           }
                           type="number"
                           min={0.001}
+                          max={1000000000}
                           step={0.001}
                           autoComplete="off"
                         />
                         <TextField
-                          label={index === 0 ? "Unit cost" : ""}
+                          label="Unit cost (optional)"
+                          labelHidden={index > 0}
+                          name="itemRate"
                           value={item.rate}
                           onChange={(value) => updateItem(index, "rate", value)}
                           type="number"
                           min={0}
+                          max={1000000000}
                           step={0.01}
                           autoComplete="off"
                         />
@@ -409,7 +465,9 @@ export default function PurchaseOrders() {
                       </div>
                     ))}
                     <InlineStack gap="300">
-                      <Button onClick={addItem}>Add item</Button>
+                      <Button onClick={addItem} disabled={items.length >= 200}>
+                        Add item
+                      </Button>
                     </InlineStack>
                   </BlockStack>
                   <TextField
@@ -419,7 +477,8 @@ export default function PurchaseOrders() {
                     onChange={setItemRows}
                     autoComplete="off"
                     multiline={4}
-                    helpText="Optional bulk import: SKU Name | quantity | expected unit cost. Commas also work."
+                    helpText="Optional: SKU Name | quantity | unit cost. Comma-separated or spreadsheet columns also work. Unit cost can be left blank."
+                    error={bulkError}
                   />
                   <InlineStack gap="300">
                     <Button
@@ -436,6 +495,8 @@ export default function PurchaseOrders() {
                     onChange={setNotes}
                     autoComplete="off"
                     multiline={2}
+                    maxLength={2000}
+                    error={fieldErrors.notes}
                   />
                   <Button submit variant="primary" loading={isSubmitting}>
                     Create purchase order

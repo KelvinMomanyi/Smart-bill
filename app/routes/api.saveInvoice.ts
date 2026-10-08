@@ -1,3 +1,4 @@
+import { merchantErrorMessage } from "../utils/merchantErrors";
 import { json, type ActionFunctionArgs } from "@remix-run/node";
 import { authenticate } from "../shopify.server";
 import { createInvoiceFromInput } from "../services/invoiceWorkflow.server";
@@ -30,7 +31,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return json(
       {
         success: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: merchantErrorMessage(
+          error,
+          "Please try again. If the problem continues, contact support.",
+        ),
       },
       { status: 400 },
     );

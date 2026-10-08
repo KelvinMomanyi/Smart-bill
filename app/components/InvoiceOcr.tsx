@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "@remix-run/react";
 import { Banner, BlockStack, Text } from "@shopify/polaris";
+import { merchantErrorMessage } from "../utils/merchantErrors";
 import {
   processInvoiceInBrowser,
   validateBrowserOcrFile,
@@ -9,17 +10,36 @@ import {
 } from "../utils/browserOcr";
 
 async function requestJson(url: string, body?: FormData) {
-  const response = await fetch(
-    url,
-    body ? { method: "POST", body } : undefined,
-  );
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...(body ? { method: "POST", body } : {}),
+      signal: AbortSignal.timeout(60_000),
+    });
+  } catch {
+    throw new Error(
+      "We couldn't reach SmartBill. Check your connection and retry, or enter the invoice text manually.",
+    );
+  }
   if (!response.headers.get("content-type")?.includes("application/json"))
     throw new Error(
       "Unable to reach SmartBill. Reload the app to restore your session, then retry.",
     );
-  const data = await response.json();
+  let data;
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error(
+      "SmartBill couldn't read the response. Reload to check whether your invoice was saved before retrying.",
+    );
+  }
   if (!response.ok || data.success === false || data.error)
-    throw new Error(data.error || "The document request failed. Please retry.");
+    throw new Error(
+      merchantErrorMessage(
+        data.error,
+        "The document request failed. Please retry, or enter the invoice text manually.",
+      ),
+    );
   return data;
 }
 
@@ -81,8 +101,10 @@ export function useInvoiceOcr(onSaved: () => void) {
       ]);
       onSaved();
     } catch (failure) {
-      const message =
-        failure instanceof Error ? failure.message : "OCR processing failed.";
+      const message = merchantErrorMessage(
+        failure,
+        "We couldn't process this invoice. Retry or enter the invoice text manually.",
+      );
       const body = jobForm("fail-browser-ocr", jobId);
       body.set("error", message);
       await requestJson("/api/jobs", body).catch(() => undefined);
@@ -101,7 +123,10 @@ export function useInvoiceOcr(onSaved: () => void) {
       await work();
     } catch (failure) {
       setError(
-        failure instanceof Error ? failure.message : "OCR processing failed.",
+        merchantErrorMessage(
+          failure,
+          "We couldn't process this invoice. Retry or enter the invoice text manually.",
+        ),
       );
     } finally {
       running.current = false;
@@ -142,7 +167,10 @@ export function useInvoiceOcr(onSaved: () => void) {
           failures.push(
             file.name +
               ": " +
-              (failure instanceof Error ? failure.message : "Capture failed."),
+              merchantErrorMessage(
+                failure,
+                "We couldn't capture this invoice. Retry or enter the invoice text manually.",
+              ),
           );
         }
       }
@@ -207,7 +235,8 @@ export function InvoiceOcrStatus({
       {ocr.preview && (
         <details>
           <summary>
-            OCR preview: {ocr.preview.filename} ({ocr.preview.pageCount} pages, {Math.round(ocr.preview.confidence)}% recognition confidence)
+            OCR preview: {ocr.preview.filename} ({ocr.preview.pageCount} pages,{" "}
+            {Math.round(ocr.preview.confidence)}% recognition confidence)
           </summary>
           {ocr.previewUrl && (
             <img

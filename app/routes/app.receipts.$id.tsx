@@ -1,3 +1,4 @@
+import { merchantErrorMessage } from "../utils/merchantErrors";
 import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import {
@@ -17,6 +18,8 @@ import { requireAdmin } from "../utils/rbac.server";
 import { requireSubscription } from "../services/billing.server";
 import { refreshPurchaseOrder } from "../services/poReconciliation.server";
 import { receiptStatus } from "../utils/poMatching";
+import { AppErrorState } from "../components/AppErrorState";
+import { formatMoney } from "../utils/format";
 export async function loader({ request, params }: LoaderFunctionArgs) {
   const { session } = await requireAdmin(request);
   const po = await prisma.purchaseOrder.findFirst({
@@ -27,7 +30,6 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       receipts: { include: { items: true }, orderBy: { receivedAt: "desc" } },
     },
   });
-  if (!po) throw new Response("Purchase order not found", { status: 404 });
   return json({ po, requestKey: randomUUID() });
 }
 export async function action({ request, params }: ActionFunctionArgs) {
@@ -92,8 +94,8 @@ export async function action({ request, params }: ActionFunctionArgs) {
           expectedQty: item.expectedQty,
           receivedQty:
             item.receivedQty +
-            (rows.find((row) => row.purchaseOrderItemId === item.id)?.quantity ||
-              0),
+            (rows.find((row) => row.purchaseOrderItemId === item.id)
+              ?.quantity || 0),
         })),
       );
       await tx.purchaseOrder.update({
@@ -123,7 +125,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
     return json(
       {
         success: false as const,
-        error: error instanceof Error ? error.message : "Receipt failed.",
+        error: merchantErrorMessage(error, "Receipt failed."),
       },
       { status: 400 },
     );
@@ -133,6 +135,15 @@ export default function ReceiveStock() {
   const { po, requestKey } = useLoaderData<typeof loader>();
   const result = useActionData<typeof action>();
   const busy = useNavigation().state !== "idle";
+  if (!po)
+    return (
+      <AppErrorState
+        title="Purchase order not found"
+        message="This purchase order is unavailable in your store. It may have been removed."
+        backTo="/app/reconciliation"
+        backLabel="Back to purchase orders"
+      />
+    );
   return (
     <Page
       title={`Receive ${po.poNumber || po.id.slice(0, 8)}`}
@@ -140,6 +151,32 @@ export default function ReceiveStock() {
       backAction={{ url: "/app/reconciliation" }}
     >
       <BlockStack gap="400">
+        <Card>
+          <BlockStack gap="200">
+            <Text as="h2" variant="headingMd">
+              Purchase order details
+            </Text>
+            <Text as="p">
+              Expected delivery:{" "}
+              {po.expectedDate
+                ? new Date(po.expectedDate).toISOString().slice(0, 10)
+                : "Not specified"}
+            </Text>
+            <Text as="p">
+              Expected total: {formatMoney(po.totalAmount || 0, po.currency)} (
+              {po.currency})
+            </Text>
+            {po.notes && <Text as="p">Notes: {po.notes}</Text>}
+            {po.items.map((item) => (
+              <Text as="p" key={item.id}>
+                {item.name}: {item.expectedQty} ×{" "}
+                {item.expectedRate == null
+                  ? "Unit cost not specified"
+                  : formatMoney(item.expectedRate, po.currency)}
+              </Text>
+            ))}
+          </BlockStack>
+        </Card>
         {result && (
           <Banner tone={result.success ? "success" : "critical"}>
             {result.success ? result.message : result.error}

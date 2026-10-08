@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { merchantErrorMessage } from "../utils/merchantErrors";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { Button } from "@shopify/polaris";
 
@@ -41,11 +42,12 @@ export function CsvDownloadButton({
       });
       const contentType = response.headers.get("content-type") || "";
       if (!response.ok || !contentType.includes("text/csv")) {
-        const message = await response.text();
         throw new Error(
           response.ok
             ? "The CSV download returned an authentication page. Reload SmartBill and try again."
-            : message.slice(0, 250) || "The CSV download failed.",
+            : response.status === 404
+              ? "No approved invoice was found for this download. Return to invoice review and choose an approved invoice."
+              : "The CSV download couldn't be prepared. Reload SmartBill and try again.",
         );
       }
 
@@ -61,7 +63,10 @@ export function CsvDownloadButton({
       shopify.toast.show("CSV downloaded");
     } catch (error) {
       shopify.toast.show(
-        error instanceof Error ? error.message : "The CSV download failed.",
+        merchantErrorMessage(
+          error,
+          "The CSV download failed. Check your connection and try again.",
+        ),
         { isError: true },
       );
     } finally {

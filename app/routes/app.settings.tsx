@@ -1,3 +1,4 @@
+import { merchantErrorMessage } from "../utils/merchantErrors";
 import { randomUUID } from "node:crypto";
 import {
   json,
@@ -28,6 +29,7 @@ import {
   requireSubscription,
   subscriptionFor,
   isDevelopmentStore,
+  billingReturnUrl,
 } from "../services/billing.server";
 import { PLANS, planFromName, TRIAL_DAYS } from "../utils/plans";
 import { validCurrency } from "../utils/invoiceRules";
@@ -43,18 +45,13 @@ import {
   deleteUomMapping,
   saveUomMapping,
 } from "../services/uomMapping.server";
-import {
-  notifyOn,
-} from "../services/notifications.server";
+import { notifyOn } from "../services/notifications.server";
 import {
   NOTIFICATION_TYPES,
   validateNotificationTarget,
 } from "../utils/notifications";
 import { ensureDefaultApprovalRules } from "../services/approvalRules.server";
-import {
-  normalizeStaffRole,
-  STAFF_ROLES,
-} from "../utils/approvalRules";
+import { normalizeStaffRole, STAFF_ROLES } from "../utils/approvalRules";
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session, admin } = await requireAdmin(request);
   await ensureDefaultApprovalRules(session.shop);
@@ -134,13 +131,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
         return {
           platform: connection.platform,
           catalog: null,
-          error:
-            error instanceof Error ? error.message : "Connection check failed.",
+          error: merchantErrorMessage(error, "Connection check failed."),
         };
       }
     }),
   );
   return json({
+    shop: session.shop,
+    billingReturned:
+      new URL(request.url).searchParams.get("billing") === "returned",
     settings,
     subscription,
     used,
@@ -185,11 +184,21 @@ export async function action({ request }: ActionFunctionArgs) {
     if (intent === "start-billing") {
       const key = planFromName(String(form.get("plan")));
       if (!key) throw new Error("Choose a valid plan.");
-      return await billing.request({
-        plan: PLANS[key].name,
-        isTest: await isDevelopmentStore(admin),
-        returnUrl: `${process.env.SHOPIFY_APP_URL?.replace(/\/$/, "") || new URL(request.url).origin}/app/settings`,
-      });
+      const isTest = await isDevelopmentStore(admin);
+      const returnUrl = billingReturnUrl(session.shop);
+      try {
+        return await billing.request({
+          plan: PLANS[key].name,
+          isTest,
+          returnUrl,
+        });
+      } catch (error) {
+        // The SDK throws Responses to open Shopify approval or reauthenticate.
+        if (error instanceof Response) throw error;
+        throw new Error(
+          "We couldn't open Shopify's subscription approval. Please try again.",
+        );
+      }
     }
     if (intent === "save-settings") {
       await requireSubscription(request);
@@ -289,7 +298,9 @@ export async function action({ request }: ActionFunctionArgs) {
         .getAll("notificationType")
         .map(String)
         .filter((type) =>
-          NOTIFICATION_TYPES.includes(type as (typeof NOTIFICATION_TYPES)[number]),
+          NOTIFICATION_TYPES.includes(
+            type as (typeof NOTIFICATION_TYPES)[number],
+          ),
         );
       if (!notificationTypes.length)
         throw new Error("Choose at least one notification type.");
@@ -318,11 +329,17 @@ export async function action({ request }: ActionFunctionArgs) {
       const results = await notifyOn(
         "APPROVAL_REQUIRED",
         session.shop,
-        { message: "This is a SmartBill test notification", actionPath: "/app/settings" },
+        {
+          message: "This is a SmartBill test notification",
+          actionPath: "/app/settings",
+        },
         { channel, includeDaily: true },
       );
       if (!results.some((result) => result.sent))
-        throw new Error(results[0]?.error || "No enabled preference is configured for this channel.");
+        throw new Error(
+          results[0]?.error ||
+            "No enabled preference is configured for this channel.",
+        );
     } else if (intent === "save-approval-rule") {
       await requireSubscription(request);
       const name = String(form.get("name") || "").trim();
@@ -333,22 +350,37 @@ export async function action({ request }: ActionFunctionArgs) {
       const invoiceAmountMin = minText ? Number(minText) : null;
       const invoiceAmountMax = maxText ? Number(maxText) : null;
       if (
-        (invoiceAmountMin != null && (!Number.isFinite(invoiceAmountMin) || invoiceAmountMin < 0)) ||
-        (invoiceAmountMax != null && (!Number.isFinite(invoiceAmountMax) || invoiceAmountMax < 0)) ||
-        (invoiceAmountMin != null && invoiceAmountMax != null && invoiceAmountMin > invoiceAmountMax)
+        (invoiceAmountMin != null &&
+          (!Number.isFinite(invoiceAmountMin) || invoiceAmountMin < 0)) ||
+        (invoiceAmountMax != null &&
+          (!Number.isFinite(invoiceAmountMax) || invoiceAmountMax < 0)) ||
+        (invoiceAmountMin != null &&
+          invoiceAmountMax != null &&
+          invoiceAmountMin > invoiceAmountMax)
       )
         throw new Error("Enter a valid approval amount range.");
       const requiredApprovers = Number(form.get("requiredApprovers"));
-      const escalateIfUnresolvedDays = Number(form.get("escalateIfUnresolvedDays"));
-      if (!Number.isInteger(requiredApprovers) || requiredApprovers < 1 || requiredApprovers > 5)
+      const escalateIfUnresolvedDays = Number(
+        form.get("escalateIfUnresolvedDays"),
+      );
+      if (
+        !Number.isInteger(requiredApprovers) ||
+        requiredApprovers < 1 ||
+        requiredApprovers > 5
+      )
         throw new Error("Required approvers must be between 1 and 5.");
-      if (!Number.isInteger(escalateIfUnresolvedDays) || escalateIfUnresolvedDays < 1 || escalateIfUnresolvedDays > 30)
+      if (
+        !Number.isInteger(escalateIfUnresolvedDays) ||
+        escalateIfUnresolvedDays < 1 ||
+        escalateIfUnresolvedDays > 30
+      )
         throw new Error("Escalation must be between 1 and 30 days.");
       const approverRoles = form
         .getAll("approverRole")
         .map(normalizeStaffRole)
         .filter((role, index, roles) => roles.indexOf(role) === index);
-      if (!approverRoles.length) throw new Error("Choose at least one approver role.");
+      if (!approverRoles.length)
+        throw new Error("Choose at least one approver role.");
       const supplierId = String(form.get("supplierId") || "") || null;
       if (
         supplierId &&
@@ -450,10 +482,7 @@ export async function action({ request }: ActionFunctionArgs) {
     return json(
       {
         success: false as const,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Settings could not be saved.",
+        error: merchantErrorMessage(error, "Settings could not be saved."),
       },
       { status: 400 },
     );
@@ -461,6 +490,8 @@ export async function action({ request }: ActionFunctionArgs) {
 }
 export default function Settings() {
   const {
+    shop,
+    billingReturned,
     settings,
     subscription,
     used,
@@ -488,6 +519,13 @@ export default function Settings() {
       subtitle="Affordable invoice control with approval before every financial change."
     >
       <BlockStack gap="500">
+        {billingReturned && (
+          <Banner tone={subscription ? "success" : "warning"}>
+            {subscription
+              ? `${PLANS[subscription.plan].label} is your active plan for ${shop}.`
+              : `No subscription is active for ${shop}. If you declined approval, you can choose a plan below and try again.`}
+          </Banner>
+        )}
         {result && (
           <Banner tone={result.success ? "success" : "critical"}>
             {result.success ? result.message : result.error}
@@ -523,7 +561,9 @@ export default function Settings() {
                       submit
                       loading={busy}
                       disabled={
-                        subscription?.plan === key && subscription.matchesPrice
+                        busy ||
+                        (subscription?.plan === key &&
+                          subscription.matchesPrice)
                       }
                     >
                       {subscription?.plan === key && subscription.matchesPrice
@@ -781,7 +821,9 @@ export default function Settings() {
                       {channel === "EMAIL" ? "Email" : "Slack"}
                     </Text>
                     <label>
-                      {channel === "EMAIL" ? "Email address" : "Incoming webhook URL"}{" "}
+                      {channel === "EMAIL"
+                        ? "Email address"
+                        : "Incoming webhook URL"}{" "}
                       <input
                         name="target"
                         type={channel === "EMAIL" ? "email" : "url"}
@@ -857,7 +899,9 @@ export default function Settings() {
                 {notificationLogs.map((log) => (
                   <Text as="p" key={log.id} tone="subdued">
                     {log.type} to {log.target}: {log.status}
-                    {log.error ? ` — ${log.error}` : ""}
+                    {log.error
+                      ? ` — ${merchantErrorMessage(log.error, "This notification couldn't be delivered.")}`
+                      : ""}
                   </Text>
                 ))}
               </BlockStack>
@@ -881,11 +925,21 @@ export default function Settings() {
                 </label>
                 <label>
                   Minimum amount{" "}
-                  <input name="invoiceAmountMin" type="number" min="0" step="0.01" />
+                  <input
+                    name="invoiceAmountMin"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                  />
                 </label>
                 <label>
                   Maximum amount{" "}
-                  <input name="invoiceAmountMax" type="number" min="0" step="0.01" />
+                  <input
+                    name="invoiceAmountMax"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                  />
                 </label>
                 <label>
                   Supplier{" "}
@@ -942,12 +996,13 @@ export default function Settings() {
               <InlineStack key={rule.id} gap="300" blockAlign="center">
                 <Text as="p">
                   {rule.name}: {rule.invoiceAmountMin ?? "0"}–
-                  {rule.invoiceAmountMax ?? "no limit"}; {rule.requiredApprovers}{" "}
-                  approver{rule.requiredApprovers === 1 ? "" : "s"} ({
-                    Array.isArray(rule.approverRoles)
-                      ? rule.approverRoles.join(", ")
-                      : "unassigned"
-                  })
+                  {rule.invoiceAmountMax ?? "no limit"};{" "}
+                  {rule.requiredApprovers} approver
+                  {rule.requiredApprovers === 1 ? "" : "s"} (
+                  {Array.isArray(rule.approverRoles)
+                    ? rule.approverRoles.join(", ")
+                    : "unassigned"}
+                  )
                 </Text>
                 {!rule.name.startsWith("Default:") && (
                   <Form method="post">
@@ -993,7 +1048,11 @@ export default function Settings() {
                     </Text>
                     {health?.error && (
                       <Banner tone="warning">
-                        {health.error} Reconnect if permissions have changed.
+                        {merchantErrorMessage(
+                          health.error,
+                          "The accounting connection couldn't be checked.",
+                        )}{" "}
+                        Reconnect if permissions have changed.
                       </Banner>
                     )}
                     {!accountingConfigured[platform] && (
@@ -1084,7 +1143,9 @@ export default function Settings() {
                     <label>
                       {s.email || s.firstName || "Staff member"}{" "}
                       <select name="role" defaultValue={s.role || "SCANNER"}>
-                        <option value="SCANNER">Scanner (low-value approval)</option>
+                        <option value="SCANNER">
+                          Scanner (low-value approval)
+                        </option>
                         <option value="APPROVER">Approver</option>
                         <option value="FINANCE">Finance</option>
                         <option value="ADMIN">Administrator</option>

@@ -1,3 +1,4 @@
+import { merchantErrorMessage } from "../utils/merchantErrors";
 import prisma from "../db.server";
 import { assertApproved } from "../utils/invoiceRules";
 import { readInvoiceDocument } from "../utils/upload.server";
@@ -211,10 +212,10 @@ export async function attachApprovedInvoiceDocument(
           error instanceof AccountingApiError && error.rejected
             ? "FAILED"
             : "VERIFY",
-        attachmentError:
-          error instanceof Error
-            ? error.message
-            : "Check the attachment in the accounting company.",
+        attachmentError: merchantErrorMessage(
+          error,
+          "Check the attachment in the accounting company.",
+        ),
       },
     });
     throw error;

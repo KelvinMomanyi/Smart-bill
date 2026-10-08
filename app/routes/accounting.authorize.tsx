@@ -1,12 +1,16 @@
 import type { LoaderFunctionArgs } from "@remix-run/node";
+import { boundary } from "@shopify/shopify-app-remix/server";
 import { launchAuthorization } from "../services/accountingAuthorization.server";
 export async function loader({ request }: LoaderFunctionArgs) {
   try {
     return await launchAuthorization(request);
   } catch (error) {
+    if (error instanceof Response) throw error;
     throw new Response(
-      error instanceof Error ? error.message : "Connection failed.",
+      "The accounting connection could not be completed. Return to Settings and reconnect.",
       { status: 400 },
     );
   }
 }
+export { AccountingConnectionErrorBoundary as ErrorBoundary } from "../components/AppErrorState";
+export const headers = boundary.headers;

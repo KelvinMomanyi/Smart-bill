@@ -1,3 +1,4 @@
+import { merchantErrorMessage } from "../utils/merchantErrors";
 import { json, type ActionFunctionArgs } from "@remix-run/node";
 import {
   assertSubscription,
@@ -42,7 +43,7 @@ export async function action({ request }: ActionFunctionArgs) {
     return json(
       {
         success: false,
-        error: error instanceof Error ? error.message : "Upload failed.",
+        error: merchantErrorMessage(error, "Upload failed."),
       },
       { status: 400 },
     );

@@ -1,8 +1,13 @@
 import prisma from "../db.server";
 import { authenticate, unauthenticated } from "../shopify.server";
 import { PLANS, planFromName, usageMonth, type PlanKey } from "../utils/plans";
+import { shopifyEmbeddedAppUrl } from "../utils/shopifyNavigation";
 
 type Admin = Awaited<ReturnType<typeof authenticate.admin>>["admin"];
+
+export function billingReturnUrl(shop: string) {
+  return `${shopifyEmbeddedAppUrl(shop, process.env.SHOPIFY_API_KEY || "")}/app/settings?billing=returned`;
+}
 
 export async function isDevelopmentStore(admin: Admin) {
   const response = await admin.graphql(`#graphql
@@ -12,7 +17,9 @@ export async function isDevelopmentStore(admin: Admin) {
   const body = await response.json();
   const development = body.data?.shop?.plan?.partnerDevelopment;
   if (("errors" in body && body.errors) || typeof development !== "boolean")
-    throw new Error("Unable to verify your store's billing status. Please retry.");
+    throw new Error(
+      "Unable to verify your store's billing status. Please retry.",
+    );
   return development;
 }
 
