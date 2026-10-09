@@ -211,7 +211,7 @@ export async function saveInvoiceReview(
   )
     ? (requestedFxSource as ExchangeRateSource)
     : "MANUAL";
-  const fxRateDate = fx.required
+  const fxRateDate = fx.reviewedRate != null
     ? resolveFxRateDate(form.get("fxRateDate")) || new Date(`${date}T00:00:00.000Z`)
     : null;
   if (fx.problem) issues.push(fx.problem);
@@ -284,11 +284,11 @@ export async function saveInvoiceReview(
         revision: { increment: 1 },
         landedCostMethod,
         landedCostUpdatedAt: new Date(),
-        fxRate: fx.required ? fx.rate : null,
-        fxRateSource: fx.required ? fxSource : null,
+        fxRate: fx.reviewedRate,
+        fxRateSource: fx.reviewedRate != null ? fxSource : null,
         fxRateDate,
         shopCurrency,
-        costInShopCurrency: fx.required ? total * fx.rate : total,
+        costInShopCurrency: fx.problem ? null : total * fx.rate,
         accountingMapping: Prisma.DbNull,
         cogsSyncStatus: "NOT_REQUESTED",
         items: {
@@ -309,14 +309,14 @@ export async function saveInvoiceReview(
       include: { items: true },
     });
     await syncFreightLines(tx, saved);
-    if (fx.required && fxRateDate)
+    if (fx.reviewedRate != null && fxRateDate)
       await recordInvoiceFxSelection(tx, {
         invoiceId: id,
         shop: session.shop,
         fromCurrency: currency,
         toCurrency: shopCurrency,
         invoiceAmount: total,
-        rate: fx.rate,
+        rate: fx.reviewedRate,
         rateDate: fxRateDate,
         source: fxSource,
         confidence: fxSource === "MANUAL" ? 40 : 80,

@@ -10,6 +10,8 @@ export type FxSource = (typeof FX_SOURCES)[number];
 export type FxResolution = {
   required: boolean;
   rate: number;
+  // Invalid calculations use zero; the editable and stored field must stay unset.
+  reviewedRate: number | null;
   problem: string;
 };
 
@@ -21,20 +23,22 @@ export function resolveFxRate(
   rate?: number | null,
 ): FxResolution {
   if (invoiceCurrency === shopCurrency)
-    return { required: false, rate: 1, problem: "" };
+    return { required: false, rate: 1, reviewedRate: null, problem: "" };
   if (rate == null || !Number.isFinite(rate))
     return {
       required: true,
       rate: 0,
+      reviewedRate: null,
       problem: `This invoice is ${invoiceCurrency} and Shopify costs are ${shopCurrency}. Choose the exchange rate before previewing or syncing costs.`,
     };
   if (rate <= 0 || rate > 100000)
     return {
       required: true,
       rate: 0,
+      reviewedRate: null,
       problem: "Enter a realistic exchange rate, for example 1.35.",
     };
-  return { required: true, rate, problem: "" };
+  return { required: true, rate, reviewedRate: rate, problem: "" };
 }
 
 export function fxSummary(

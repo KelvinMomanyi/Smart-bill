@@ -92,6 +92,19 @@ test("foreign invoices require a reviewed exchange rate", () => {
     "1 USD = 1.35 CAD dated 2026-09-01. Shopify costs are written in CAD.",
   );
 });
+
+test("missing or invalid exchange rates remain unset while reviewing an invoice", () => {
+  for (const rate of [null, undefined, 0, -1, NaN, Infinity, 100001]) {
+    const fx = resolveFxRate("USD", "KES", rate);
+    assert.equal(fx.required, true);
+    assert.equal(fx.reviewedRate, null);
+    assert.ok(fx.problem, "Approval and cost sync still require a valid rate");
+  }
+  const valid = resolveFxRate("USD", "KES", 130.5);
+  assert.equal(valid.reviewedRate, 130.5);
+  assert.equal(valid.problem, "");
+  assert.equal(resolveFxRate("KES", "KES", null).reviewedRate, null);
+});
 test("pack sizes are reused and unknown pack units block the sync", () => {
   assert.equal(resolvePackSize({}), 1);
   assert.equal(resolvePackSize({ packSize: 12 }), 12);

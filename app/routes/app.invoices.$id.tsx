@@ -237,7 +237,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
         ? `This supplier last used ${invoice.vendor.defaultLandedCostMethod}. Review the change to ${landedCostMethod} before approval.`
         : "",
     shopCurrency,
-    fxRate: invoice.fxRate,
+    fxRate: fx.reviewedRate,
     fxProblem: fx.problem,
     fxRequired: fx.required,
     fxOptions,
