@@ -12,4 +12,3 @@ export function formatTimestamp(value: Date | string) {
   if (!Number.isFinite(date.getTime())) return "Date unavailable";
   return `${date.toISOString().slice(0, 19).replace("T", " ")} UTC`;
 }
-
