@@ -7,6 +7,7 @@ This is an append-only review ledger. Parser regressions and live document recog
 | 2026-10-09 10:18 | Freelance-Invoice-Template-Sample-500x650.webp / WEBP | FAIL | Usable error and retry; failed completion created no partial invoice | Invoice number read as Main instead of 10001; duplicate rejection HTTP 400. Recorded in SHOPIFY_OCR_LIVE_REMEDIATION_2026-10-09.md. |
 | 2026-10-09 10:51 | Same stored original / WEBP, post-fix retry | PASS, tested sample | PASS after additional review-save and refresh fixes | Visually verified invoice 10001, Company Name, 2018-01-01, USD, four lines, 3010 subtotal / 301 tax / 3311 total. Confidence 87% is not the pass criterion. Invoice 0d3a2006-f73e-449b-a4ad-0908694321dc. |
 | 2026-10-09 16:14 | invoice-template-us-us-flag-750px.png / PNG | FAIL: 19 / 24 fields | Upload 202, completion 200, review usable and arithmetic differences flagged; revision-0 database snapshot retained | US-001, East Repair Inc., dates/totals correct, but quantities became 1/1/1 instead of 1/2/3 and names included the leading digits. Confidence 75% was not counted as accuracy. Invoice 3dc2a0e1-bf78-44c7-b53a-f7d0f8f20517. |
+| 2026-10-09 16:44–16:46 | Same PNG invoice, merchant corrections | Original FAIL retained | PASS: corrected values 24 / 24; save 200, refresh 200, database revision 1 | Descriptions corrected; quantities 1/2/3, rates 100/15/5, amounts 100/30/15, subtotal 145, tax 9.06, total 154.06. This is reviewed accuracy, not a new original OCR pass. |
 
 The sample's tax amount was inferred from the printed 10% rate and totals and flagged for review. The sample has an expiry label; no payment due date was assumed. Current invoice revision 2 includes merchant edits and cannot serve as a fresh, unedited OCR measurement. Historical initial UI checks remain in the remediation report.
 
@@ -23,4 +24,43 @@ Two real documents have now been tested: the freelance WEBP and East Repair PNG.
 
 The original image was independently read from the app's 750 × 1061 preview. It prints QTY before DESCRIPTION, UNIT PRICE and AMOUNT, but browser OCR read QTY as `ary`. The parser recognised the other headers as a table without a quantity column, assumed quantity 1, and treated each leading quantity as part of the description. The fix reads a quantity-first header when available; if that heading is unreadable, it accepts a leading quantity only when quantity × printed unit price equals the printed amount and keeps a manual-review warning. Numeric product names are protected by an arithmetic regression.
 
-The corpus now has eight cases and 157 checked fields. All pass locally, including the exact PNG layout. Full suite: 193 tests pass. The initial live snapshot still fails, as it should: a local parser fix cannot change or retroactively validate the already stored initial values. Its report with both initial UI and database evidence is `.cache/ocr-accuracy/runs/2026-10-09T16-39-27-757Z-eef4c326-4b50-43b3-83a9-6534dd0d4651.json`: current parser 24/24, original saved/UI 19/24, initial live FAIL. Deployment and corrected-UI verification will be appended after completion.
+The corpus now has eight cases and 157 checked fields. All pass locally, including the exact PNG layout. Full suite: 193 tests pass. The initial live snapshot still fails, as it should: a local parser fix cannot change or retroactively validate the already stored initial values. Its report with both initial UI and database evidence is `.cache/ocr-accuracy/runs/2026-10-09T16-39-27-757Z-eef4c326-4b50-43b3-83a9-6534dd0d4651.json`: current parser 24/24, original saved/UI 19/24, initial live FAIL.
+
+Production deployment `baeed663ad67902b13d45869b73eb0862830ff69` is Active / Deployed (completed), confirmed in GitHub through Playwright MCP: `https://smart-bill-self-g29z0mstz-bostone339-6995.vercel.app`. The earlier currency/description fix `6088345031db5e814174950010b35c3bbba96b92` deployed successfully at `https://smart-bill-self-30bl858my-bostone339-6995.vercel.app`.
+
+The supplied PNG was corrected through visible review controls and saved at 16:44 UTC. It reopened/refreshed at 16:45 UTC with all corrected values retained. Read-only PostgreSQL snapshot and comparison at 16:46 UTC match 24/24 fields; the report labels revision 1 as reviewed and initial live accuracy UNVERIFIED for that reviewed snapshot. Its original failed revision-0 measurement remains above.
+
+At 16:50 UTC a separate **manual-text** invoice, `MCP-ACCURACY-20261009-01`, verified the deployed parser through the actual merchant UI: quantity-first row `2.5 Mailer Boxes 12.50 31.25`, currency KES, subtotal/total 31.25, tax zero, date 2026-10-09 and due date 2026-10-16. Capture returned 200 and saved success; reopening showed the complete description, correct quantity, price, currency and warning for the unreadable quantity heading. Invoice ID `deacbced-26eb-483e-b079-ee738b3d070d`. UI and read-only database checks pass; all 14 expected fields match. This is deployed parser/UI proof, not another file OCR run.
+
+The corrected PNG and manual-text invoice remain unapproved, NOT_EXPORTED and NOT_REQUESTED for Shopify cost sync. Database checks confirm no exports or cost changes. The audit exported to `.cache/ocr-accuracy/live/2026-10-09T16-54-15-925Z-ui-audit.json` contains 44 app responses, no unexpected HTTP errors, no app exceptions, no app console errors and no failed app requests. The complete Shopify Admin shell console is not being labelled error-free.
+
+The browser was returned to the correct-store capture page with an enabled input, zero picker interception listeners and no pending file/text. A new file upload after this fix still needs to verify initial extraction; the existing PNG was not deleted/reuploaded or silently reparsed.
+
+## Australian invoice upload — 9 October 2026, 17:04 UTC
+
+The third independent document, `download-free-invoice-template-in-pdf.png`, was uploaded manually as an 855257-byte PNG (3572 × 5055 pixels). Native Playwright MCP observed upload 202, completion 200, the saved-for-review success state and an enabled review workflow. The app preview was visually read independently before corrections. Recognition confidence was 91%, but the original extraction **FAILS: 15 / 19 checked fields** in both the UI and the revision-0 PostgreSQL snapshot.
+
+| Field | Printed original | Initial OCR / saved value |
+|---|---|---|
+| Supplier | Your Business Name | Q Era |
+| Invoice number | 2022435 | Missing |
+| Currency | AUD | USD |
+| Combined GST | 410.00 (10.00 + 400.00) | 400.00 |
+
+Both dates (2022-07-19 and 2022-08-03), both complete item descriptions, quantities 1/1, prices and amounts 100/2000, subtotal 2100 and total 2510 were correct. The invoice stayed usable and flagged the missing number and tax/total difference; no raw HTTP error appeared. The complete original text was stored, including the correct supplier name in the footer, the bare `Invoice 2022435` heading and both GST amounts.
+
+Root causes: the supplier heuristic preferred a short logo artifact; invoice-number labels required No/#; a dollar subtotal won before the explicitly labelled AUD total; tax parsing selected the last rate component instead of the sum. Narrow fixes complete a multiword supplier prefix only against a repeated footer name beside a street address, support bare numbered invoice headings, prioritise explicit currency labels, and sum verified rate components in the final summary. Explicit tax totals take precedence over their breakdown, and inconsistent components are not summed.
+
+The original failed evidence is preserved: `.cache/ocr-accuracy/evidence/2026-10-09T17-12-04-030Z-b4744831-1018-4399-98c7-4d78c5beb07a.json`, `.cache/ocr-accuracy/live/2022435-initial-ui.json` and `.cache/ocr-accuracy/runs/2026-10-09T17-13-48-461Z-2fd3b5df-6e19-41fa-bda2-f000e086db71.json`. Invoice ID `af7167d7-f4f3-45d3-bf30-6b93fcb4d0a6`; job `abf01ff3-624a-46b4-9112-c3633828567c`.
+
+After the fix, replaying the actual stored OCR matches 19/19 expected fields, while the same initial UI/database evidence still correctly fails 15/19: `.cache/ocr-accuracy/runs/2026-10-09T17-15-49-794Z-d0018ca3-bbbe-4c42-9618-754252d0b359.json`. This is parser proof, not a replacement for the original live result. A sanitized version of the actual OCR is the ninth regression case. All nine cases pass (176 expected fields); the full automated suite passes 198 tests, and TypeScript, targeted ESLint and production build pass.
+
+The four corrections were entered through the visible review controls and saved at 17:17 UTC (POST 200, `Invoice updated.`). Browser refresh at 17:18 UTC retained every corrected field, revision 1. The reviewed UI observation is `.cache/ocr-accuracy/live/2022435-reviewed-ui.json`; the read-only database snapshot is `.cache/ocr-accuracy/evidence/2026-10-09T17-19-31-020Z-906c415f-f8cf-4b85-9466-5f3fc4a56143.json`. Its comparison at 17:20 UTC passes 19/19 parser and saved fields: `.cache/ocr-accuracy/runs/2026-10-09T17-20-41-105Z-d558fae9-c980-406b-be2c-ec338e1d52af.json`, with revision 1 explicitly labelled REVIEWED and initial live accuracy UNVERIFIED. No approval or accounting/cost-sync action was invoked. A reviewed AUD/KES exchange rate is still required before approval/cost sync.
+
+Production deployment and deployed-parser UI verification will be recorded below after completion. A new, untouched file capture is still required to validate these fixes end to end through recognition.
+
+## Remaining verification (after the third document)
+
+Continue uploading independent invoice layouts over time. Live PDF/JPG/multipage/rotation/poor scans and OCR timeout/service-failure coverage remain pending. The printed P.O. reference requires merchant selection. Broader Shopify reinstall billing and Xero Demo/QuickBooks Sandbox verification remain as described in the earlier review; this test suite does not establish complete App Store readiness.
+
+**NOT READY FOR SHOPIFY RETEST**

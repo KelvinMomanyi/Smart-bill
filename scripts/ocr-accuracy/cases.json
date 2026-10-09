@@ -105,5 +105,37 @@
       ]
     },
     "requiredWarnings": ["quantity heading was unreadable"]
+  },
+  {
+    "id": "uploaded-aud-multiple-gst-2022435",
+    "source": "Sanitized OCR transcript of the merchant-supplied public invoice template PNG, captured 2026-10-09. Expected fields independently read from the original image in the app preview, before corrections. Supplier logo text is incomplete; the full trading name repeats in the footer.",
+    "dateOrder": "DMY",
+    "rawText": "Invoice 2022435\r\n\r\nIg!                                                                                                                                                                            Tax invoice\r\nQ Era\r\nYour Business\r\nBILL TO\r\nYour Client                                                                                                                                                                         Issue date:                              19/7/2022\r\nDue date:                          3/8/2022\r\n\r\n\r\nTotal due (AUD)\r\n$2,510.00\r\nDescription                                                                                                     Quantity                                   Unit price ($)                               Amount ($)\r\nServices & products                                                                                                            1                                                100.00                                         100.00\r\nMore services & products                                                                         1                                 2,000.00                            2,000.00\r\nSubtotal:                                                                                                                                                                                                                                      $2,100.00\r\nGST 10% from $100.00                                                                                               $10.00\r\nGST 20% from $2,000.00                                                                                                                                           $400.00\r\nTotal (AUD):                                                                                                             $2,510.00\r\nIssued by, signature:\r\n\r\n\r\nYour Business Name\r\n5 Example Street\r\n\r\n\r\n\r\nPDF",
+    "expected": {
+      "supplier": "Your Business Name",
+      "invoiceNumber": "2022435",
+      "date": "2022-07-19",
+      "dueDate": "2022-08-03",
+      "currency": "AUD",
+      "subtotal": 2100,
+      "tax": 410,
+      "total": 2510,
+      "items": [
+        {
+          "sku": null,
+          "name": "Services & products",
+          "quantity": 1,
+          "price": 100,
+          "amount": 100
+        },
+        {
+          "sku": null,
+          "name": "More services & products",
+          "quantity": 1,
+          "price": 2000,
+          "amount": 2000
+        }
+      ]
+    }
   }
 ]

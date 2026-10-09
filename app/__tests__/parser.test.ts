@@ -5,6 +5,40 @@ import {
   parseInvoiceText,
 } from "../utils/parser.server";
 
+test("bare invoice headings identify a number without accepting dates or prose", () => {
+  assert.equal(parseInvoiceText("Supplier: Acme\nInvoice 2022435\nDate: 2022-07-19").invoiceNumber, "2022435");
+  assert.equal(parseInvoiceText("Invoice INV-2022-35\nDate: 2022-07-19").invoiceNumber, "INV-2022-35");
+  for (const heading of ["Invoice Date", "Tax Invoice", "Invoice 2022-07-19", "Invoice for 35 items"]) {
+    assert.equal(parseInvoiceText(heading).invoiceNumber, undefined);
+  }
+});
+
+test("explicit dollar currency labels win over an earlier ambiguous dollar subtotal", () => {
+  for (const currency of ["AUD", "CAD", "NZD"]) {
+    const parsed = parseInvoiceText(`Supplier: Acme\nInvoice No: C-1\nDate: 2022-07-19\nSubtotal $100.00\nTax $0.00\nTotal (${currency}): $100.00`);
+    assert.equal(parsed.currency, currency);
+  }
+  assert.equal(parseInvoiceText("CAD drawings 1 $100.00 $100.00\nTotal $100.00").currency, "USD");
+});
+
+test("rate breakdowns add tax amounts and an explicit tax total is not double counted", () => {
+  const prefix = "Supplier: Acme\nInvoice No: GST-1\nDate: 2022-07-19\nSubtotal $2100.00\nGST 10% from $100.00 $10.00\nGST 20% from $2000.00 $400.00\n";
+  assert.equal(parseInvoiceText(prefix + "Total (AUD): $2510.00").tax, 410);
+  assert.equal(parseInvoiceText(prefix + "Tax total $410.00\nTotal (AUD): $2510.00").tax, 410);
+  assert.equal(parseInvoiceText(prefix + "Total GST $410.00\nTotal (AUD): $2510.00").tax, 410);
+  // An inconsistent printed component must not be legitimised by adding it.
+  assert.equal(parseInvoiceText(prefix.replace("$400.00", "$300.00") + "Total (AUD): $2510.00").tax, 300);
+});
+
+test("supplier completion requires a matching footer name beside an address", () => {
+  const header = "Invoice 2022435\nQ Era\nYour Business\nBILL TO\nYour Business Customer\n1 Buyer Street\nDate: 2022-07-19\nSubtotal $10.00\nTotal (AUD): $10.00\n";
+  const completed = parseInvoiceText(header + "Your Business Name\n5 Seller Street\nAustralia");
+  assert.equal(completed.vendor.name, "Your Business Name");
+  assert.equal(completed.vendor.address, "5 Seller Street, Australia");
+  assert.notEqual(parseInvoiceText(header).vendor.name, "Your Business Customer");
+  assert.notEqual(parseInvoiceText(header + "Your Business Name\nThank you").vendor.name, "Your Business Name");
+});
+
 test("parseInvoiceText extracts invoice fields and line items", () => {
   const parsed = parseInvoiceText(`
     Supplier: Acme Packaging

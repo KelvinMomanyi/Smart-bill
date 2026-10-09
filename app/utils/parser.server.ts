@@ -248,8 +248,16 @@ const codeBesideMoney = new RegExp(
   "i",
 );
 
+const labelledCurrency = new RegExp(
+  `\\b(?:total(?:\\s+due)?|amount(?:\\s+due)?|balance(?:\\s+due)?|sub[\\s-]*total|tax|vat|gst)\\s*\\(\\s*(${currencyCodes})\\s*\\)` +
+    `|\\bcurrency\\s*:?\\s*(${currencyCodes})\\b`,
+  "i",
+);
+
 function currencyOnLine(line: string | undefined, allowDollar: boolean) {
   if (!line) return undefined;
+  const labelled = line.match(labelledCurrency);
+  if (labelled) return (labelled[1] || labelled[2]).toUpperCase();
   const code = line.match(codeBesideMoney);
   if (code) return (code[1] || code[2]).toUpperCase();
   const symbol = symbolCurrencies.find(([pattern]) => pattern.test(line));
@@ -259,11 +267,11 @@ function currencyOnLine(line: string | undefined, allowDollar: boolean) {
 }
 
 function extractCurrency(lines: string[], summaryLines: Array<string | undefined> = []) {
-  for (const line of summaryLines) {
-    const currency = currencyOnLine(line, true);
-    if (currency) return { currency, assumed: false };
-  }
   for (const allowDollar of [false, true]) {
+    for (const line of summaryLines) {
+      const currency = currencyOnLine(line, allowDollar);
+      if (currency) return { currency, assumed: false };
+    }
     for (const line of lines) {
       const currency = currencyOnLine(line, allowDollar);
       if (currency) return { currency, assumed: false };
@@ -340,17 +348,33 @@ function extractVendor(lines: string[], regionEnd: number): ParsedAddress {
 
   if (!name) {
     let best = 0;
+    const lastSummary = lines.reduce((last, line, index) => isItemSummaryLine(line) ? index : last, -1);
     for (const [index, line] of lines.slice(0, Math.max(regionEnd, 1)).entries()) {
-      const score = vendorScore(line, index);
+      let score = vendorScore(line, index);
+      if (score < 0) continue;
+      // A logo may lose the last word of a trading name. Complete it only
+      // when a multiword header prefix repeats in the supplier footer next
+      // to a street address, beyond the item/totals and customer blocks.
+      const prefix = line.toLocaleLowerCase().split(/\s+/);
+      const completedIndex = prefix.length >= 2 && lastSummary >= regionEnd
+        ? lines.findIndex((candidate, candidateIndex) =>
+          candidateIndex > lastSummary && candidate.length <= 80 &&
+          candidate.toLocaleLowerCase().startsWith(line.toLocaleLowerCase() + " ") &&
+          vendorScore(candidate, 0) >= 0 &&
+          /^\d+[A-Z]?\s+.*\p{L}/u.test(lines[candidateIndex + 1] || ""),
+        )
+        : -1;
+      if (completedIndex >= 0) score += 20;
       if (score > best) {
         best = score;
-        nameIndex = index;
-        name = line;
+        nameIndex = completedIndex >= 0 ? completedIndex : index;
+        name = lines[nameIndex];
       }
     }
   }
 
-  const region = lines.slice(0, Math.max(regionEnd, nameIndex + 1));
+  const regionStart = nameIndex >= regionEnd ? nameIndex : 0;
+  const region = regionStart ? lines.slice(regionStart, regionStart + 5) : lines.slice(0, regionEnd);
   const email = region.find((line) => emailPattern.test(line))?.match(emailPattern)?.[0];
   const phone =
     region.find((line) => labelledPhone.test(line))?.match(labelledPhone)?.[1] ||
@@ -358,7 +382,7 @@ function extractVendor(lines: string[], regionEnd: number): ParsedAddress {
   const taxId = region.find((line) => taxIdPattern.test(line))?.match(taxIdPattern)?.[1];
 
   const address: string[] = [];
-  for (let cursor = nameIndex + 1; cursor < region.length && address.length < 4; cursor += 1) {
+  for (let cursor = nameIndex - regionStart + 1; cursor < region.length && address.length < 4; cursor += 1) {
     const line = region[cursor];
     if (
       emailPattern.test(line) ||
@@ -1064,6 +1088,13 @@ function findInvoiceNumber(lines: string[]) {
       if (isNumber(following)) return following;
     }
   }
+  // Some invoices print only "Invoice 2022435", with no No/# qualifier.
+  // Restrict the fallback to a complete heading and an identifier containing
+  // digits, so Invoice Date, Tax Invoice and prose never become numbers.
+  for (const line of lines) {
+    const heading = line.match(/^\s*(?:invoice|inv)\s*:?[ \t]+([A-Z0-9][A-Z0-9._/-]*)\s*$/i)?.[1];
+    if (heading && /\d/.test(heading) && !normalizeDate(heading)) return heading;
+  }
   return undefined;
 }
 
@@ -1144,6 +1175,45 @@ function findPercentageByLabel(lines: string[], labelPattern: RegExp) {
     if (value != null) return value;
   }
   return undefined;
+}
+
+function findTaxSource(lines: string[]) {
+  const taxLabel = /\b(?:tax|vat|gst)\b/i;
+  const fallback = findMoneyByLabel(lines, taxLabel, { excludePercentages: true, reverse: true });
+  const subtotalIndex = lines.reduce((last, line, index) => /sub[\s-]*total\b/i.test(line) ? index : last, -1);
+  const totalIndex = lines.reduce((last, line, index) =>
+    /\b(?:total|amount\s+due|balance\s+due)\b/i.test(line) && !/\b(?:sub[\s-]*total|tax|vat|gst)\b/i.test(line) ? index : last,
+    -1,
+  );
+  if (subtotalIndex < 0 || totalIndex <= subtotalIndex) return fallback;
+  const summaryLines = lines.slice(subtotalIndex + 1, totalIndex);
+  // An explicit total wins over its rate breakdown; never count both.
+  const aggregate = findMoneyByLabel(summaryLines.filter((line) => !/\d+(?:[.,]\d+)?\s*%/.test(line)),
+    /^\s*(?:total\s+(?:tax|vat|gst)|(?:sales\s+tax|tax|vat|gst)(?:\s+total)?)\b/i,
+    { excludePercentages: true, reverse: true },
+  );
+  if (aggregate) return aggregate;
+  const components = summaryLines.filter((line) =>
+    /^\s*(?:sales\s+tax|tax|vat|gst)\s+\d+(?:[.,]\d+)?\s*%/i.test(line),
+  ).map((line) => {
+    const source = findMoneyOnLine(line, { excludePercentages: true });
+    if (!source) return undefined;
+    const base = line.match(/\b(?:from|on|of)\s+(.+)$/i)?.[1];
+    // A printed base alone is not a tax amount. When a base is shown, require
+    // a separate amount and verify the printed percentage before summing.
+    if (base) {
+      const amounts = [...base.matchAll(new RegExp(moneyPattern, "gi"))];
+      const baseAmount = parseMoney(amounts[0]?.[1]);
+      const rate = findPercentageByLabel([line], taxLabel);
+      if (amounts.length < 2 || baseAmount == null || rate == null ||
+          moneyDifference(roundParsedMoney(baseAmount * rate / 100), source.value) > 0.011) return undefined;
+    }
+    return source;
+  });
+  if (components.length < 2 || components.some((entry) => !entry)) return fallback;
+  const validComponents = components.filter((entry): entry is ParsedMoneySource => Boolean(entry));
+  const value = roundParsedMoney(validComponents.reduce((sum, entry) => sum + entry.value, 0));
+  return { raw: value.toFixed(2), value, line: validComponents.map((entry) => entry.line).join("; ") };
 }
 
 function roundParsedMoney(value: number) {
@@ -1402,10 +1472,7 @@ export function parseInvoiceText(text: string, dateOrder: "DMY" | "MDY" = "DMY")
     reverse: true,
   });
   const taxLabel = /\b(?:tax|vat|gst)\b/i;
-  const taxSource = findMoneyByLabel(lines, taxLabel, {
-    excludePercentages: true,
-    reverse: true,
-  });
+  const taxSource = findTaxSource(lines);
   const taxRate = findPercentageByLabel(lines, taxLabel);
   const totalSource = findMoneyByLabel(
     lines,
