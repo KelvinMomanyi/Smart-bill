@@ -128,8 +128,8 @@ export function parsedValues(parsed: {
   };
 }
 
-export function liveAccuracyStatus(revision: number, originalUiPass: boolean, networkPass: boolean, databasePass: boolean) {
+export function liveAccuracyStatus(revision: number, originalUiPass: boolean | null, networkPass: boolean, databasePass: boolean) {
   // Current reviewed values can never retroactively prove initial OCR accuracy.
-  if (!originalUiPass || revision !== 0) return "UNVERIFIED";
-  return networkPass && databasePass ? "PASS" : "FAIL";
+  if (originalUiPass === null || revision !== 0) return "UNVERIFIED";
+  return originalUiPass && networkPass && databasePass ? "PASS" : "FAIL";
 }

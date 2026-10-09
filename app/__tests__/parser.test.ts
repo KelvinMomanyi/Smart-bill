@@ -151,6 +151,23 @@ test("unit words in product descriptions survive before quantity", () => {
   assert.deepEqual(parsed.items.map((item) => item.quantity), [12, 2, 3]);
 });
 
+test("quantity-first invoice tables read the printed quantities before descriptions", () => {
+  const parsed = parseInvoiceText("Supplier: East Repair Inc.\nInvoice No: QTY-FIRST-1\nDate: 2019-02-11\nQTY Description Unit Price Amount\n1 Front and rear brake cables 100.00 100.00\n2 New set of pedal arms 15.00 30.00\n3 Labor 3hrs 5.00 15.00\nSubtotal 145.00\nTotal USD 145.00");
+  assert.deepEqual(parsed.items.map((item) => [item.name, item.quantity, item.price, item.amount]), [
+    ["Front and rear brake cables", 1, 100, 100],
+    ["New set of pedal arms", 2, 15, 30],
+    ["Labor 3hrs", 3, 5, 15],
+  ]);
+  assert.ok(!parsed.warnings?.some((warning) => /quantity heading was unreadable/.test(warning)));
+});
+
+test("unreadable quantity headings do not turn product pack sizes into quantities", () => {
+  const parsed = parseInvoiceText("Supplier: Test Supplies\nInvoice No: PACK-NAME-1\nDate: 2026-10-09\nDescription Unit Price Amount\n500 Sheets Copier Paper 10.00 10.00\nSubtotal 10.00\nTotal USD 10.00");
+  assert.equal(parsed.items[0].name, "500 Sheets Copier Paper");
+  assert.equal(parsed.items[0].quantity, 1);
+  assert.ok(!parsed.warnings?.some((warning) => /quantity heading was unreadable/.test(warning)));
+});
+
 test("parseInvoiceText captures rows with units and tax-code columns", () => {
   const parsed = parseInvoiceText(`
     Supplier: Warehouse Goods

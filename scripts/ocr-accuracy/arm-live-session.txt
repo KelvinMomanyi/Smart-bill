@@ -9,7 +9,7 @@ async (page) => {
     for (const [event, listener] of previous.listeners) page.off(event, listener);
   }
   const safePath = value => {
-    try { const url = new URL(value); return url.origin === origin ? url.pathname : null; }
+    try { const url = new URL(value); return url.protocol === 'https:' && url.origin === origin ? url.pathname : null; }
     catch { return null; }
   };
   const redact = value => String(value)

@@ -41,6 +41,7 @@ type ParsedInvoiceItemWithSource = ParsedInvoiceItem & {
   _rawRate?: string;
   _rawAmount?: string;
   _quantityRepaired?: boolean;
+  _leadingQuantityRepaired?: boolean;
 };
 
 export type ParsedInvoice = {
@@ -458,6 +459,7 @@ type ItemColumnHints = {
   quantity: boolean;
   rate: boolean;
   amount: boolean;
+  quantityFirst?: boolean;
 };
 
 const emptyItemHints = (): ItemColumnHints => ({
@@ -517,7 +519,11 @@ function itemHeaderHints(line: string): ItemColumnHints | null {
     (trailingValue || !(description && (quantity || rate || amount)))
   )
     return null;
-  return { seen: true, quantity, rate, amount };
+  const quantityFirst = quantity && description
+    ? lower.search(new RegExp(`\\b(?:${columnWords.quantity})\\b`)) <
+      lower.search(new RegExp(`\\b(?:${columnWords.description})\\b`))
+    : undefined;
+  return { seen: true, quantity, rate, amount, quantityFirst };
 }
 
 function isItemSummaryLine(line: string) {
@@ -668,6 +674,22 @@ function parseItemLine(
       packSize: detectPackSize(item.name, supplierUoM) || undefined,
     };
   };
+
+  // Some invoices place quantity before description. If OCR loses the quantity
+  // heading, trust a leading number only when the printed rate and line amount
+  // prove it; product names such as "500 Sheets Copier Paper" remain intact.
+  if (hints.quantityFirst || (hints.seen && !hints.quantity)) {
+    const leadingQuantity = normalizedRow.match(new RegExp(
+      `^(${quantityPattern})\\s+(.+)\\s+${moneyPattern}${rateUnitSuffix}\\s+${moneyPattern}$`,
+      "i",
+    ));
+    if (leadingQuantity) {
+      const item = buildParsedItem(leadingQuantity[2], leadingQuantity[1], leadingQuantity[3], leadingQuantity[4], !hints.quantityFirst);
+      if (item && (hints.quantityFirst || Math.abs(item.quantity * item.rate - item.amount) <= 0.011)) {
+        return withUnit({ ...item, _leadingQuantityRepaired: !hints.quantityFirst });
+      }
+    }
+  }
 
   // A quantity of 5 or 1 is frequently read as a standalone S, I, l or |.
   // Only repair it when the printed rate and amount prove the arithmetic, so
@@ -942,6 +964,7 @@ function extractItems(lines: string[]) {
         quantity: hints.quantity || header.quantity,
         rate: hints.rate || header.rate,
         amount: hints.amount || header.amount,
+        quantityFirst: header.quantityFirst ?? hints.quantityFirst,
       };
       continue;
     }
@@ -1357,6 +1380,7 @@ function withoutItemSource(item: ParsedInvoiceItemWithSource): ParsedInvoiceItem
     _rawRate: _ignoredRate,
     _rawAmount: _ignoredAmount,
     _quantityRepaired: _ignoredQuantityRepair,
+    _leadingQuantityRepaired: _ignoredLeadingQuantityRepair,
     ...parsed
   } = item;
   return parsed;
@@ -1440,6 +1464,10 @@ export function parseInvoiceText(text: string, dateOrder: "DMY" | "MDY" = "DMY")
   if (sourceItems.some((item) => item._quantityRepaired))
     warnings.push(
       "OCR read a quantity digit as a letter on one or more lines. SmartBill repaired it only where quantity × unit price matched the printed line amount; confirm the repaired quantities before approval.",
+    );
+  if (sourceItems.some((item) => item._leadingQuantityRepaired))
+    warnings.push(
+      "The table quantity heading was unreadable. SmartBill used a leading quantity only where quantity × unit price matched the printed line amount; confirm these quantities against the original before approval.",
     );
   if (inferredTax != null)
     warnings.push(

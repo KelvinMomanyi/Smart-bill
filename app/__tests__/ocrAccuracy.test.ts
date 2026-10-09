@@ -73,7 +73,8 @@ test("database comparison preserves duplicate rows and can ignore unspecified da
 
 test("reviewed invoices and unobserved UI cannot be credited as accurate original OCR", () => {
   assert.equal(liveAccuracyStatus(2, true, true, true), "UNVERIFIED");
-  assert.equal(liveAccuracyStatus(0, false, true, true), "UNVERIFIED");
+  assert.equal(liveAccuracyStatus(0, null, true, true), "UNVERIFIED");
+  assert.equal(liveAccuracyStatus(0, false, true, true), "FAIL");
   assert.equal(liveAccuracyStatus(0, true, false, true), "FAIL");
   assert.equal(liveAccuracyStatus(0, true, true, false), "FAIL");
   assert.equal(liveAccuracyStatus(0, true, true, true), "PASS");

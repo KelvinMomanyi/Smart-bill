@@ -89,5 +89,21 @@
       "currency": "USD", "subtotal": 10, "tax": 0, "total": 10,
       "items": [{"sku": null, "name": "Stationery", "quantity": 1, "price": 10, "amount": 10}]
     }
+  },
+  {
+    "id": "uploaded-east-repair-us-001",
+    "source": "Sanitized actual PNG OCR transcript from the merchant upload on 2026-10-09. Ground truth independently read from the original image in the app preview. The QTY heading was recognized as ary.",
+    "dateOrder": "DMY",
+    "rawText": "INVOICE\nEast Repair Inc.\nINVOICE #                                US-001\nINVOICE DATE                    11/02/2019\nDUE DATE                           26/02/2019\nary                               DESCRIPTION                                     UNIT PRICE                           AMOUNT\n1          Front and rear brake cables                                                   100.00                                100.00\n2            New set of pedal arms                                                                        15.00                                        30.00\n3           Labor 3hrs                                                                                   5.00                                    15.00\nSubtotal                              145.00\nSales Tax 6.25%                                   9.06\nTOTAL                         $154.06",
+    "expected": {
+      "supplier": "East Repair Inc.", "invoiceNumber": "US-001", "date": "2019-02-11", "dueDate": "2019-02-26",
+      "currency": "USD", "subtotal": 145, "tax": 9.06, "total": 154.06,
+      "items": [
+        {"sku": null, "name": "Front and rear brake cables", "quantity": 1, "price": 100, "amount": 100},
+        {"sku": null, "name": "New set of pedal arms", "quantity": 2, "price": 15, "amount": 30},
+        {"sku": null, "name": "Labor 3hrs", "quantity": 3, "price": 5, "amount": 15}
+      ]
+    },
+    "requiredWarnings": ["quantity heading was unreadable"]
   }
 ]
