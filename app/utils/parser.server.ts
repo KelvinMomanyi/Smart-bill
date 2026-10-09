@@ -1016,14 +1016,32 @@ function findCreditField(lines: string[], patterns: RegExp[]) {
 }
 
 function findInvoiceNumber(lines: string[]) {
-  const candidate = findValue(lines, [
-    /\b(?:invoice|inv)\s*(?:number|no\.?|#)\s*:?\s*([A-Z0-9][A-Z0-9._/-]*)/i,
-    /\b(?:document|reference)\s*(?:number|no\.?|#)\s*:?\s*([A-Z0-9][A-Z0-9._/-]*)/i,
-  ]);
+  const labels = [
+    /\b(?:invoice|inv)[ \t]*(?:number|no\.?|#)[ \t]*:?/i,
+    /\b(?:document|reference)[ \t]*(?:number|no\.?|#)[ \t]*:?/i,
+  ];
+  const isNumber = (candidate?: string) => candidate &&
+    !/^(date|due|total|tax|amount|number|no|invoice|document|reference)$/i.test(candidate);
 
-  if (!candidate || /^(date|due|total|tax|amount)$/i.test(candidate))
-    return undefined;
-  return candidate;
+  for (const label of labels) {
+    for (const [index, line] of lines.entries()) {
+      const match = line.match(label);
+      if (!match) continue;
+      const rest = line.slice((match.index || 0) + match[0].trimEnd().length);
+      // Do not truncate an adjacent address ("Main, AZ ...") to a false
+      // identifier. Some layouts put the real number below its label.
+      const inline = rest.match(/^[ \t]*([A-Z0-9][A-Z0-9._/-]*)(?=$|[ \t])/i)?.[1];
+      if (isNumber(inline)) return inline;
+
+      // Preserve OCR column spacing so a number and a separate phone column
+      // can be read without consuming the next labelled field.
+      const following = lines[index + 1]?.match(
+        /^([A-Z0-9][A-Z0-9._/-]*)(?:[ \t]{2,}.*)?$/i,
+      )?.[1];
+      if (isNumber(following)) return following;
+    }
+  }
+  return undefined;
 }
 
 function findInvoiceDate(lines: string[], dateOrder: "DMY" | "MDY") {
@@ -1346,10 +1364,11 @@ function withoutItemSource(item: ParsedInvoiceItemWithSource): ParsedInvoiceItem
 
 export function parseInvoiceText(text: string, dateOrder: "DMY" | "MDY" = "DMY"): ParsedInvoice {
   const normalizedText = normalizeInvoiceOcrText(text);
-  const lines = normalizedText
+  const sourceLines = normalizedText
     .split(/\r?\n/)
-    .map((line) => line.replace(/\s+/g, " ").trim())
+    .map((line) => line.trim())
     .filter(Boolean);
+  const lines = sourceLines.map((line) => line.replace(/\s+/g, " "));
 
   const dueDate = normalizeDate(
     findValue(lines, [/(?:due\s+date|payment\s+due)\s*:?\s*(.+)$/i]), dateOrder,
@@ -1455,7 +1474,7 @@ export function parseInvoiceText(text: string, dateOrder: "DMY" | "MDY" = "DMY")
     /\b(?:original\s+|against\s+)?invoice\s*(?:number|no\.?|#)\s*:?\s*([A-Z0-9][A-Z0-9._/-]*)/i,
     /\breference\s*:?\s*(?:invoice\s*)?([A-Z0-9][A-Z0-9._/-]*)/i,
   ]);
-  const documentNumber = creditNoteNumber || findInvoiceNumber(lines);
+  const documentNumber = creditNoteNumber || findInvoiceNumber(sourceLines);
   const isCreditDocument = creditNoteSignals({
     rawText: normalizedText,
     invoiceNumber: documentNumber,

@@ -41,6 +41,46 @@ test("parseInvoiceText flags incomplete invoices with empty items and zero total
   assert.deepEqual(parsed.items, []);
 });
 
+test("invoice numbers below their label do not come from an adjacent address column", () => {
+  const parsed = parseInvoiceText(`
+Company Name
+123 Main St
+INVOICE NO                                      Main, AZ 33394
+10001                                          (999) 999-9999
+sample@email.com
+BILL TO:
+John Smith
+456 Main Street Issued Date: 01/01/2018
+TOTAL DUE
+$3,311.00
+Product 1 2 $45.00 $90.00
+Product 2 3 $100.00 $300.00
+Service 1 1 $20.00 $20.00
+Service 2 S $520.00 $2,600.00
+SUB TOTAL $3,010.00
+TAX (%) 10.00%
+  `);
+
+  assert.equal(parsed.invoiceNumber, "10001");
+  assert.equal(parsed.vendor.name, "Company Name");
+  assert.equal(parsed.date, "2018-01-01");
+  assert.equal(parsed.subtotal, 3010);
+  assert.equal(parsed.tax, 301);
+  assert.equal(parsed.total, 3311);
+  assert.equal(parsed.items.length, 4);
+  assert.equal(parsed.items[3].quantity, 5);
+});
+
+test("invoice numbers on a following line support alphanumeric identifiers", () => {
+  assert.equal(parseInvoiceText("Invoice No:\nINV-2026/10001\nDate: 2026-10-09").invoiceNumber, "INV-2026/10001");
+  assert.equal(parseInvoiceText("Reference Number\nREF-10001\nTotal 10.00").invoiceNumber, "REF-10001");
+});
+
+test("a missing invoice number does not consume the next labelled field", () => {
+  assert.equal(parseInvoiceText("Invoice No:\nInvoice Date: 2026-10-09\nTotal USD 10.00").invoiceNumber, undefined);
+  assert.equal(parseInvoiceText("Invoice No                           Date\nInvoice Date: 2026-10-09\nTotal USD 10.00").invoiceNumber, undefined);
+});
+
 test("parseInvoiceText repairs common OCR errors in dollar amounts and labels", () => {
   const source = `
     Supplier: Clearview Studio
