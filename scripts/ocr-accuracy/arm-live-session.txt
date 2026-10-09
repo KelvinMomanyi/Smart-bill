@@ -1,0 +1,60 @@
+async (page) => {
+  const origin = 'https://smart-bill-self-five.vercel.app';
+  const frame = page.frames().find(frame => frame.url().startsWith(origin + '/app'));
+  if (!frame || !page.url().startsWith('https://admin.shopify.com/store/creatorsstore254/apps/smartbill-1')) {
+    throw new Error('Open SmartBill in the correct Shopify Admin store before arming live OCR diagnostics.');
+  }
+  const previous = page.__smartBillOcrAccuracyAudit;
+  if (previous) {
+    for (const [event, listener] of previous.listeners) page.off(event, listener);
+  }
+  const safePath = value => {
+    try { const url = new URL(value); return url.origin === origin ? url.pathname : null; }
+    catch { return null; }
+  };
+  const redact = value => String(value)
+    .replace(/https?:\/\/[^\s]+/g, '[URL]')
+    .replace(/\beyJ[A-Za-z0-9_.-]+\b/g, '[TOKEN]')
+    .slice(0, 400);
+  const audit = {
+    startedAt: new Date().toISOString(),
+    responses: [], failures: [], exceptions: [], consoleErrors: [], listeners: [],
+  };
+  const listen = (event, listener) => { page.on(event, listener); audit.listeners.push([event, listener]); };
+  listen('response', async response => {
+    const path = safePath(response.url());
+    if (!path) return;
+    const entry = { at: new Date().toISOString(), path, method: response.request().method(), status: response.status() };
+    audit.responses.push(entry);
+    if (response.request().method() === 'POST' && ['/api/jobs', '/api/upload-invoice'].includes(path)) {
+      try {
+        const body = await response.json();
+        entry.result = {
+          success: body.success ?? null, jobId: body.jobId ?? null,
+          invoiceId: body.invoiceId ?? null, creditNoteId: body.creditNoteId ?? null,
+          status: body.status ?? null, error: body.error ? redact(body.error) : null,
+        };
+      } catch { entry.result = { unreadableResponse: true }; }
+    }
+  });
+  listen('requestfailed', request => {
+    const path = safePath(request.url());
+    if (path) audit.failures.push({ at: new Date().toISOString(), path, method: request.method(), error: redact(request.failure()?.errorText) });
+  });
+  listen('pageerror', error => audit.exceptions.push({ at: new Date().toISOString(), error: redact(error.message) }));
+  listen('console', message => {
+    if (message.type() === 'error' && safePath(message.location().url)) {
+      audit.consoleErrors.push({ at: new Date().toISOString(), error: redact(message.text()) });
+    }
+  });
+  page.__smartBillOcrAccuracyAudit = audit;
+  // Public Playwright listener API restores manual selection. It does not
+  // attach a file or bypass restrictions on automated file attachments.
+  for (const listener of page.listeners('filechooser')) page.off('filechooser', listener);
+  await page.bringToFront();
+  return {
+    startedAt: audit.startedAt, appPath: frame ? safePath(frame.url()) : null,
+    manualPickerReady: page.listenerCount('filechooser') === 0,
+    selectedFiles: frame ? await frame.locator('input[type=file]').evaluateAll(inputs => inputs.flatMap(input => [...input.files].map(file => ({ name: file.name, type: file.type, size: file.size })))) : [],
+  };
+}

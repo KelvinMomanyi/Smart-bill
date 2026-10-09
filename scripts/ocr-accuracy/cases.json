@@ -1,0 +1,93 @@
+[
+  {
+    "id": "uploaded-freelance-10001",
+    "source": "Sanitized regression transcript of the merchant's WEBP, visually verified in the live MCP review on 2026-10-09. This fixture alone is parser evidence, not a new image OCR run.",
+    "dateOrder": "DMY",
+    "rawText": "Company Name\n123 Main St\nINVOICE NO                                      Main, AZ 33394\n10001                                          (999) 999-9999\nBILL TO:\nJohn Smith\n456 Main Street Issued Date: 01/01/2018\nTOTAL DUE\n$3,311.00\nProduct 1 2 $45.00 $90.00\nProduct 2 3 $100.00 $300.00\nService 1 1 $20.00 $20.00\nService 2 S $520.00 $2,600.00\nSUB TOTAL $3,010.00\nTAX (%) 10.00%",
+    "expected": {
+      "supplier": "Company Name", "invoiceNumber": "10001", "date": "2018-01-01", "dueDate": null,
+      "currency": "USD", "subtotal": 3010, "tax": 301, "total": 3311,
+      "items": [
+        {"sku": null, "name": "Product 1", "quantity": 2, "price": 45, "amount": 90},
+        {"sku": null, "name": "Product 2", "quantity": 3, "price": 100, "amount": 300},
+        {"sku": null, "name": "Service 1", "quantity": 1, "price": 20, "amount": 20},
+        {"sku": null, "name": "Service 2", "quantity": 5, "price": 520, "amount": 2600}
+      ]
+    },
+    "requiredWarnings": ["quantity digit as a letter", "tax rate but no tax amount"]
+  },
+  {
+    "id": "taxed-sku-two-lines",
+    "source": "Synthetic labelled invoice: SKU, tax, due date, two products.",
+    "dateOrder": "DMY",
+    "rawText": "Supplier: Acme Packaging\nInvoice No: INV-1007\nInvoice Date: 2026-06-10\nDue Date: 2026-07-10\nDescription Qty Rate Amount\nPACK-100 Mailer Boxes 12 4.50 54.00\nTAPE-20 Packing Tape 3 6.00 18.00\nSubtotal 72.00\nTax 7.20\nTotal USD 79.20",
+    "expected": {
+      "supplier": "Acme Packaging", "invoiceNumber": "INV-1007", "date": "2026-06-10", "dueDate": "2026-07-10",
+      "currency": "USD", "subtotal": 72, "tax": 7.2, "total": 79.2,
+      "items": [
+        {"sku": "PACK-100", "name": "Mailer Boxes", "quantity": 12, "price": 4.5, "amount": 54},
+        {"sku": "TAPE-20", "name": "Packing Tape", "quantity": 3, "price": 6, "amount": 18}
+      ]
+    }
+  },
+  {
+    "id": "localized-eur",
+    "source": "Synthetic European decimal and thousands separators.",
+    "dateOrder": "DMY",
+    "rawText": "Supplier: Atelier Europe\nInvoice Number: EU-1234\nInvoice Date: 15/09/2026\nDescription Qty Rate Amount\nTranslation 1 EUR 1.234,56 €1.234,56\nSubtotal €1.234,56\nTax €0,00\nTotal EUR 1.234,56",
+    "expected": {
+      "supplier": "Atelier Europe", "invoiceNumber": "EU-1234", "date": "2026-09-15", "dueDate": null,
+      "currency": "EUR", "subtotal": 1234.56, "tax": 0, "total": 1234.56,
+      "items": [{"sku": null, "name": "Translation", "quantity": 1, "price": 1234.56, "amount": 1234.56}]
+    }
+  },
+  {
+    "id": "wrapped-description-precision",
+    "source": "Synthetic description and numeric columns split across OCR lines, three-decimal unit price.",
+    "dateOrder": "DMY",
+    "rawText": "Supplier: Support Company\nInvoice No: SC-22\nDate: 2026-09-15\nDescription\nQty\nUnit Price\nAmount\nAnnual support and\nimplementation package\n2\n$27.945\n$55.89\nSubtotal $55.89\nTax $0.00\nTotal USD $55.89",
+    "expected": {
+      "supplier": "Support Company", "invoiceNumber": "SC-22", "date": "2026-09-15", "dueDate": null,
+      "currency": "USD", "subtotal": 55.89, "tax": 0, "total": 55.89,
+      "items": [{"sku": null, "name": "Annual support and implementation package", "quantity": 2, "price": 27.945, "amount": 55.89}]
+    }
+  },
+  {
+    "id": "multipage-continuation",
+    "source": "Synthetic two-page OCR transcript with intermediate subtotals. Not a live PDF upload.",
+    "dateOrder": "DMY",
+    "rawText": "Supplier: Cycle Supply\nInvoice No: MULTI-4\nDate: 24 September 2026\nDescription Qty Unit Price Amount\nBrake cables 1 100.00 100.00\nPedal arms 1 30.00 30.00\nWorkshop labor 3 5.00 15.00\nSubtotal 145.00\n--- Page 2 ---\nDescription Qty Unit Price Amount\nCable clips 2 2.50 5.00\nSubtotal 150.00\nTax 9.38\nTotal USD 159.38",
+    "expected": {
+      "supplier": "Cycle Supply", "invoiceNumber": "MULTI-4", "date": "2026-09-24", "dueDate": null,
+      "currency": "USD", "subtotal": 150, "tax": 9.38, "total": 159.38,
+      "items": [
+        {"sku": null, "name": "Brake cables", "quantity": 1, "price": 100, "amount": 100},
+        {"sku": null, "name": "Pedal arms", "quantity": 1, "price": 30, "amount": 30},
+        {"sku": null, "name": "Workshop labor", "quantity": 3, "price": 5, "amount": 15},
+        {"sku": null, "name": "Cable clips", "quantity": 2, "price": 2.5, "amount": 5}
+      ]
+    }
+  },
+  {
+    "id": "fractional-kes",
+    "source": "Synthetic Kenyan invoice with fractional quantity and explicit currency.",
+    "dateOrder": "DMY",
+    "rawText": "Supplier: Nairobi Supplies\nInvoice No: KE-901\nInvoice Date: 09/10/2026\nDescription Qty Rate Amount\nPrinter paper 2.5 12.50 31.25\nSubtotal KES 31.25\nTax KES 0.00\nTotal KES 31.25",
+    "expected": {
+      "supplier": "Nairobi Supplies", "invoiceNumber": "KE-901", "date": "2026-10-09", "dueDate": null,
+      "currency": "KES", "subtotal": 31.25, "tax": 0, "total": 31.25,
+      "items": [{"sku": null, "name": "Printer paper", "quantity": 2.5, "price": 12.5, "amount": 31.25}]
+    }
+  },
+  {
+    "id": "configured-us-date",
+    "source": "Synthetic US date-order invoice; ambiguous dates follow the configured MDY preference.",
+    "dateOrder": "MDY",
+    "rawText": "Supplier: American Supplies\nInvoice Number: US-101\nInvoice Date: 10/09/2026\nDue Date: 11/09/2026\nDescription Qty Rate Amount\nStationery 1 10.00 10.00\nSubtotal USD 10.00\nTax USD 0.00\nTotal USD 10.00",
+    "expected": {
+      "supplier": "American Supplies", "invoiceNumber": "US-101", "date": "2026-10-09", "dueDate": "2026-11-09",
+      "currency": "USD", "subtotal": 10, "tax": 0, "total": 10,
+      "items": [{"sku": null, "name": "Stationery", "quantity": 1, "price": 10, "amount": 10}]
+    }
+  }
+]

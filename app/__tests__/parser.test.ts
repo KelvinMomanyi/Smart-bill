@@ -137,6 +137,20 @@ test("OCR normalization is conservative outside monetary fields", () => {
   assert.match(normalized, /Total \$55\.89/);
 });
 
+test("monetary OCR repair preserves currency codes ending in a digit lookalike", () => {
+  for (const currency of ["KES", "GHS"]) {
+    const source = `Supplier: Test Supplies\nInvoice No: CUR-1\nDate: 2026-10-09\nWidget 1 31.25 31.25\nSubtotal ${currency} 31.25\nTax ${currency} 0.00\nTotal ${currency} 31.25`;
+    assert.match(normalizeInvoiceOcrText(source), new RegExp(`Total ${currency} 31\\.25`));
+    assert.equal(parseInvoiceText(source).currency, currency);
+  }
+});
+
+test("unit words in product descriptions survive before quantity", () => {
+  const parsed = parseInvoiceText("Supplier: Acme\nInvoice No: NAMES-1\nDate: 2026-10-09\nDescription Qty Rate Amount\nMailer Boxes 12 4.50 54.00\nStorage Case 2 5.00 10.00\nPacking Rolls 3 6.00 18.00\nSubtotal USD 82.00\nTotal USD 82.00");
+  assert.deepEqual(parsed.items.map((item) => item.name), ["Mailer Boxes", "Storage Case", "Packing Rolls"]);
+  assert.deepEqual(parsed.items.map((item) => item.quantity), [12, 2, 3]);
+});
+
 test("parseInvoiceText captures rows with units and tax-code columns", () => {
   const parsed = parseInvoiceText(`
     Supplier: Warehouse Goods

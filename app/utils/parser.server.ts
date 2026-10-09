@@ -115,7 +115,7 @@ export function normalizeInvoiceOcrText(text: string) {
   // Preserve normal prose and identifiers; only repair digit lookalikes on
   // lines whose labels make the value unambiguously monetary.
   normalized = normalized.replace(
-    /^(\s*(?:subtotal|sub-total|tax|vat|gst|grand\s+total|invoice\s+total|total|amount\s+due|balance\s+due)\b.*?)([\dOIlS][\dOIlS\s,'’.]*(?:[.,]\s*[\dOIlS]{1,4}))\s*$/gim,
+    /^(\s*(?:subtotal|sub-total|tax|vat|gst|grand\s+total|invoice\s+total|total|amount\s+due|balance\s+due)\b.*?)(?<![A-Z0-9])([\dOIlS][\dOIlS\s,'’.]*(?:[.,]\s*[\dOIlS]{1,4}))\s*$/gim,
     (_match, label: string, amount: string) =>
       label + normalizeOcrDigits(amount),
   );
@@ -633,7 +633,13 @@ function parseItemLine(
   hints: ItemColumnHints = emptyItemHints(),
   relaxed = false,
 ): ParsedInvoiceItemWithSource | null {
-  const cleanedLine = line
+  // A unit before quantity is a separate cell only when OCR retained column
+  // delimiters. Otherwise "Mailer Boxes 12" must keep Boxes in the product name.
+  const reorderedCells = line.replace(
+    new RegExp(`([|\\t])\\s*(${itemUnitToken})\\.?\\s*[|\\t]\\s*(${quantityPattern})(?=\\s*[|\\t])`, "i"),
+    (_match, delimiter: string, unit: string, quantity: string) => `${delimiter} ${quantity} ${unit}`,
+  );
+  const cleanedLine = reorderedCells
     .replace(/[|]+/g, " ")
     .replace(/\s{2,}/g, " ")
     .trim();
@@ -644,13 +650,7 @@ function parseItemLine(
     isNonItemAdministrativeLine(cleanedLine)
   )
     return null;
-  const normalizedRow = cleanedLine.replace(
-    new RegExp(
-      `(?<!/)\\b(${itemUnitToken})\\.?\\s+(${quantityPattern})(?=\\s+${currencyPattern}\\s*[+-]?\\d)`,
-      "i",
-    ),
-    (_match, unit: string, quantity: string) => `${quantity} ${unit}`,
-  );
+  const normalizedRow = cleanedLine;
   const billedUnit = normalizedRow.match(
     new RegExp(
       `\\b${quantityPattern}\\s+(${itemUnitToken})\\.?\\s+(?=${currencyPattern}\\s*[+-]?\\d)`,
