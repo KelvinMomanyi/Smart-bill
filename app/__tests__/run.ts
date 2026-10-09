@@ -5,6 +5,7 @@ import "./accountingExport.test";
 import "./invoiceControls.test";
 import "./landedCost.test";
 import "./unitCost.test";
+import "./format.test";
 import "./phase2.test";
 import "./invoiceJobs.test";
 import "./browserOcr.test";

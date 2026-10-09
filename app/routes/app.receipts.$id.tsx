@@ -20,7 +20,7 @@ import { refreshPurchaseOrder } from "../services/poReconciliation.server";
 import { receiptStatus } from "../utils/poMatching";
 import { AppErrorState } from "../components/AppErrorState";
 import { useEmbeddedAppPath } from "../components/EmbeddedLink";
-import { formatMoney } from "../utils/format";
+import { formatMoney, formatTimestamp } from "../utils/format";
 export async function loader({ request, params }: LoaderFunctionArgs) {
   const { session } = await requireAdmin(request);
   const po = await prisma.purchaseOrder.findFirst({
@@ -226,7 +226,7 @@ export default function ReceiveStock() {
             {po.receipts.length ? (
               po.receipts.map((r) => (
                 <Text as="p" key={r.id}>
-                  {new Date(r.receivedAt).toLocaleString()} —{" "}
+                  {formatTimestamp(r.receivedAt)} —{" "}
                   {r.reference || "Delivery"} —{" "}
                   {r.items.reduce((s, i) => s + i.quantity, 0)} units —{" "}
                   {r.actor}

@@ -256,7 +256,9 @@ export default function PurchaseOrders() {
       `${received}/${expected}`,
       invoiceCount.toString(),
       formatMoney(po.totalAmount || 0, po.currency),
-      po.updatedAt ? new Date(po.updatedAt).toLocaleDateString() : "",
+      po.updatedAt
+        ? new Date(po.updatedAt).toLocaleDateString("en-US", { timeZone: "UTC" })
+        : "",
     ];
   });
 

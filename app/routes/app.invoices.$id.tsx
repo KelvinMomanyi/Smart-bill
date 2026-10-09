@@ -69,7 +69,7 @@ import {
   exportInvoiceToAccounting,
   verifyAccountingExport,
 } from "../services/accountingExport.server";
-import { formatMoney } from "../utils/format";
+import { formatMoney, formatTimestamp } from "../utils/format";
 import type { loader as productLoader } from "./api.products";
 import { attachInvoiceDocument } from "../services/accountingAttachment.server";
 import { livePlatform } from "../services/accountingConnection.server";
@@ -1633,7 +1633,7 @@ function InvoiceEditor({
             </Text>
             {events.map((e) => (
               <Text as="p" key={e.id}>
-                {new Date(e.createdAt).toLocaleString()} — {e.action} —{" "}
+                {formatTimestamp(e.createdAt)} — {e.action} —{" "}
                 {e.actor}
               </Text>
             ))}
