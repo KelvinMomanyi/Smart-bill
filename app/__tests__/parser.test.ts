@@ -5,6 +5,28 @@ import {
   parseInvoiceText,
 } from "../utils/parser.server";
 
+test("Egyptian monetary suffixes preserve all item rows and flag document discounts", () => {
+  const parsed = parseInvoiceText(`PAINTING\nINVOICE\nCompany:\nAdress:\nLocation:\nInvoice Number 2001321\nDate 12/26/2024\nDescription Quantity Unit price Amount\nProduct 1 5 100.00 L.E. 500.00 L.E.\nproduct 2 3 20.00 L.E. 60.00 L.E.\nproduct 3 1 25.00 L.E. 25.00 L.E.\nSubtotal 585.00 L.E.\nDiscount (10%) 58.50 L.E.\nTax 1 52.65 L.E.\nTotal 679.15 L.E.`);
+  assert.equal(parsed.vendor.name, "Unknown Vendor");
+  assert.equal(parsed.currency, "EGP");
+  assert.deepEqual(parsed.items.map(i => [i.name, i.quantity, i.price, i.amount]), [
+    ["Product 1", 5, 100, 500], ["product 2", 3, 20, 60], ["product 3", 1, 25, 25],
+  ]);
+  assert.equal(parsed.subtotal, 585);
+  assert.equal(parsed.tax, 52.65);
+  // An OCR digit error is not silently replaced by an invented balanced total.
+  assert.equal(parsed.total, 679.15);
+  assert.ok(parsed.warnings?.some(w => /discount of 58.50.*net line prices/i.test(w)));
+});
+
+test("LE prose and an explicitly supplied supplier do not get rewritten", () => {
+  const parsed = parseInvoiceText("Company: Acme Painting\nInvoice No: LE-1\nDate: 2024-12-26\nDescription Qty Rate Amount\nLE edition paint 1 10.00 10.00\nSubtotal 10.00\nTax 0.00\nTotal EGP 10.00");
+  assert.equal(parsed.vendor.name, "Acme Painting");
+  assert.equal(parsed.items[0].name, "LE edition paint");
+  assert.equal(parsed.currency, "EGP");
+  assert.equal(parseInvoiceText("LE edition paint 1 $10.00 $10.00\nTotal $10.00").currency, "USD");
+});
+
 test("bare invoice headings identify a number without accepting dates or prose", () => {
   assert.equal(parseInvoiceText("Supplier: Acme\nInvoice 2022435\nDate: 2022-07-19").invoiceNumber, "2022435");
   assert.equal(parseInvoiceText("Invoice INV-2022-35\nDate: 2022-07-19").invoiceNumber, "INV-2022-35");

@@ -65,7 +65,7 @@ export type ParsedInvoice = {
 };
 
 const currencyCodes =
-  "USD|EUR|GBP|CAD|AUD|NZD|KES|ZAR|NGN|GHS|JPY|CNY|INR|AED|UGX|TZS|RWF|BRL|PHP";
+  "USD|EUR|GBP|CAD|AUD|NZD|KES|ZAR|NGN|GHS|JPY|CNY|INR|AED|UGX|TZS|RWF|BRL|PHP|EGP";
 const currencyPattern =
   `(?:(?:${currencyCodes})|R\\$|KSh|[$\\u20ac\\u00a3\\u00a5\\u20b9\\u20a6\\u20b5\\u20b1])?`;
 const numberPattern =
@@ -260,6 +260,8 @@ function currencyOnLine(line: string | undefined, allowDollar: boolean) {
   if (labelled) return (labelled[1] || labelled[2]).toUpperCase();
   const code = line.match(codeBesideMoney);
   if (code) return (code[1] || code[2]).toUpperCase();
+  // LE / L.E. denotes Egyptian pounds only when adjacent to an amount.
+  if (/\d[.,]\d{2,4}\s+L\.?E\.?(?=\s|$)|\bL\.?E\.?\s+[+-]?\d/i.test(line)) return "EGP";
   const symbol = symbolCurrencies.find(([pattern]) => pattern.test(line));
   if (symbol) return symbol[1];
   // "$" is shared by several currencies, so it only decides when no code does.
@@ -284,7 +286,7 @@ function isLikelyHeader(line: string) {
   return (
     /\b(?:invoices?|receipts?|statements?|dates?|totals?|subtotals?|tax|vat|gst|amount\s+due|bill\s+to|ship\s+to|remit\s+to)\b/i.test(
       line,
-    ) || /^page\s+\d+/i.test(line)
+    ) || /\b(?:order\s+number|shipping\s+(?:date|number)|country\s+of|terms\s+of\s+payment|bill\s+of\s+lading)\b/i.test(line) || /^page\s+\d+/i.test(line)
   );
 }
 
@@ -299,7 +301,7 @@ const contactLabel =
   /^(?:tel|telephone|phone|mobile|cell|fax|e-?mail|web(?:site)?|www\.|https?:|vat|tax|gst|pin|reg(?:istration)?|company\s+(?:no|number|reg)|p\.?\s?o\.?\s*box|attn)\b/i;
 
 function vendorScore(line: string, index: number) {
-  if (isLikelyHeader(line) || contactLabel.test(line)) return -1;
+  if (isLikelyHeader(line) || contactLabel.test(line) || otherLabelledField.test(line)) return -1;
   if (emailPattern.test(line) || barePhone.test(line)) return -1;
   // Street numbers and account references are never the trading name.
   if (/^\d/.test(line)) return -1;
@@ -349,7 +351,15 @@ function extractVendor(lines: string[], regionEnd: number): ParsedAddress {
   if (!name) {
     let best = 0;
     const lastSummary = lines.reduce((last, line, index) => isItemSummaryLine(line) ? index : last, -1);
+    const hasEmptySupplierField = lines.slice(0, regionEnd).some((line) =>
+      /^(?:company|supplier|vendor|seller|sender\s+name)\s*:\s*$/i.test(line),
+    );
     for (const [index, line] of lines.slice(0, Math.max(regionEnd, 1)).entries()) {
+      // A blank template may split "PAINTING INVOICE" across two lines.
+      // Its document title must not become a supplier when supplier labels
+      // are explicitly empty. Filled supplier labels were handled above.
+      if (hasEmptySupplierField && /^invoice\s*$/i.test(lines[index + 1] || "") &&
+          /^[A-Z][A-Z\s]+$/.test(line)) continue;
       let score = vendorScore(line, index);
       if (score < 0) continue;
       // A logo may lose the last word of a trading name. Complete it only
@@ -671,6 +681,9 @@ function parseItemLine(
   );
   const cleanedLine = reorderedCells
     .replace(/[|]+/g, " ")
+    // Egyptian invoices often suffix each monetary cell with L.E. Keep the
+    // raw source for currency detection, and remove only numeric cell suffixes.
+    .replace(/(\d[.,]\d{2,4})\s+(?:L\.?E\.?|EGP)(?=\s|$)/gi, "$1")
     .replace(/\s{2,}/g, " ")
     .trim();
   if (
@@ -1520,6 +1533,13 @@ export function parseInvoiceText(text: string, dateOrder: "DMY" | "MDY" = "DMY")
   const warnings = date
     ? []
     : ["Invoice date was missing or invalid; confirm the date before approval."];
+  const documentDiscount = findMoneyByLabel(lines, /^\s*(?:discount|less\s+discount)\b/i,
+    { excludePercentages: true, reverse: true },
+  );
+  if (documentDiscount && documentDiscount.value > 0)
+    warnings.push(
+      `This invoice shows a document discount of ${documentDiscount.value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}. Review the printed total and enter net line prices and subtotal after the discount before approval.`,
+    );
   if (currencyResult.assumed)
     warnings.push(
       "Invoice currency was not found. SmartBill assumed USD; confirm the currency before approval.",

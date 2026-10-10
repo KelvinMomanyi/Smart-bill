@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   browserOcrImageDimensions,
   invoiceOcrTextScore,
+  invoiceOcrSummaryBalance,
   needsOcrAccuracyPass,
   processInvoiceInBrowser,
   validateBrowserOcrText,
@@ -214,6 +215,29 @@ test("weak OCR gets an alternate-layout accuracy pass and keeps the stronger res
   assert.ok(mock.parameters.some((value) => value.tessedit_pageseg_mode === "6"));
   assert.match(result.rawText, /\$55\.89/);
   assert.equal(result.confidence, 88);
+});
+
+test("high-confidence OCR with a wrong total gets a real alternate read, not invented digits", async () => {
+  const wrong = "Invoice 2001321\nDate 12/26/2024\nProduct 1 5 100.00 L.E. 500.00 L.E.\nproduct 2 3 20.00 L.E. 60.00 L.E.\nproduct 3 1 25.00 L.E. 25.00 L.E.\nSubtotal 585.00 L.E.\nDiscount (10%) 58.50 L.E.\nTax 1 52.65 L.E.\nTotal 679.15 L.E.";
+  const correct = wrong.replace("679.15", "579.15");
+  assert.equal(invoiceOcrSummaryBalance(wrong), false);
+  assert.equal(invoiceOcrSummaryBalance(correct), true);
+  assert.equal(needsOcrAccuracyPass(wrong, 91), true);
+  assert.equal(needsOcrAccuracyPass(correct, 85), false);
+  assert.ok(invoiceOcrTextScore(correct, 85) > invoiceOcrTextScore(wrong, 91));
+  const mock = fakeRuntime(1, async call => ({data: {text: call === 1 ? wrong : correct, confidence: call === 1 ? 91 : 85}}));
+  const result = await processInvoiceInBrowser(new File(["image"], "invoice.webp", {type: "image/webp"}), () => {}, mock.runtime);
+  assert.equal(mock.calls.length, 2);
+  assert.equal(result.rawText, correct);
+});
+
+test("OCR summary scoring handles explicit tax totals and defers unsupported summaries", () => {
+  const summary = "Subtotal 2,100.00\nGST 10% from 100.00 10.00\nGST 20% from 2,000.00 400.00\nTax total 410.00\nTotal (AUD): 2,510.00";
+  assert.equal(invoiceOcrSummaryBalance(summary), true);
+  assert.equal(invoiceOcrSummaryBalance(summary.replace("Tax total 410.00\n", "")), true);
+  assert.equal(invoiceOcrSummaryBalance("Subtotal 100.00\nTax 10%\nTotal 110.00"), null);
+  assert.equal(invoiceOcrSummaryBalance("Subtotal 100.00\nFreight 10.00\nTax 11.00\nTotal 121.00"), null);
+  assert.equal(invoiceOcrSummaryBalance("Subtotal 1.234,56\nTax 0,00\nTotal EUR 1.234,56"), true);
 });
 
 test("OCR uses a sparse pass when dense layouts still lose the decimal", async () => {

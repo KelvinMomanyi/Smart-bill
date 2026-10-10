@@ -210,6 +210,45 @@ async function prepareBrowserInvoiceImage(image: Blob, monochrome: boolean) {
   }
 }
 
+export function invoiceOcrSummaryBalance(text: string): boolean | null {
+  const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const decimalAmounts = (line: string) => [...line.matchAll(/[+-]?(?:\d{1,3}(?:[ ,.'’]\d{3})+|\d+)[.,]\d{2}\b/g)]
+    .filter(match => !/^\s*%/.test(line.slice((match.index || 0) + match[0].length)))
+    .map(match => {
+      const amount = match[0].trim();
+      const separator = Math.max(amount.lastIndexOf("."), amount.lastIndexOf(","));
+      return Number(amount.slice(0, separator).replace(/[ ,.'’]/g, "") + "." + amount.slice(separator + 1));
+    });
+  const subtotalIndex = lines.reduce((last, line, i) => /^sub[\s-]*total\b/i.test(line) ? i : last, -1);
+  const totalIndex = lines.reduce((last, line, i) =>
+    /^(?:grand\s+total|invoice\s+total|total(?:\s+due)?|amount\s+due|balance\s+due)\b/i.test(line) &&
+    !/\b(?:tax|vat|gst)\b/i.test(line) ? i : last, -1,
+  );
+  if (subtotalIndex < 0 || totalIndex <= subtotalIndex) return null;
+  const summary = lines.slice(subtotalIndex + 1, totalIndex);
+  // Do not treat a legitimate charge, deposit or credit as a digit error.
+  if (summary.some(line => /\b(?:shipping|freight|handling|insurance|surcharge|rounding|deposit|paid|credit|withheld)\b/i.test(line))) return null;
+  const subtotal = decimalAmounts(lines[subtotalIndex]).at(-1);
+  const total = decimalAmounts(lines[totalIndex]).at(-1);
+  const taxes = summary.filter(line => /^(?:sales\s+tax|tax|vat|gst|total\s+(?:tax|vat|gst))\b/i.test(line));
+  const aggregate = taxes.filter(line => /^(?:total\s+(?:tax|vat|gst)|(?:tax|vat|gst)\s+total)\b/i.test(line)).at(-1);
+  const taxLines = aggregate ? [aggregate] : taxes;
+  const discounts = summary.filter(line => /^(?:discount|less\s+discount)\b/i.test(line));
+  if (!taxLines.length || [...taxLines, ...discounts].some(line =>
+    !decimalAmounts(line).length || (/\b(?:from|on|of)\b/i.test(line) && decimalAmounts(line).length < 2),
+  )) return null;
+  const tax = taxLines.reduce((sum, line) => sum + decimalAmounts(line).at(-1)!, 0);
+  const discount = discounts.reduce((sum, line) => sum + decimalAmounts(line).at(-1)!, 0);
+  if (subtotal == null || total == null || ![subtotal, tax, discount, total].every(Number.isFinite) ||
+      subtotal < 0 || tax < 0 || discount < 0 || discount > subtotal || total < 0) return null;
+  // Select among actual recognition reads; this never edits recognised digits.
+  return Math.abs(subtotal - discount + tax - total) < 0.015;
+}
+
+function hasOcrCurrency(text: string) {
+  return /[$€£¥₹₦₵₱]|R\$|KSh|\b(?:USD|EUR|GBP|CAD|AUD|NZD|KES|ZAR|NGN|GHS|JPY|CNY|INR|AED|UGX|TZS|RWF|BRL|PHP|EGP)\b|\d[.,]\d{2,4}\s+L\.?E\.?(?=\s|$)/i.test(text);
+}
+
 export function invoiceOcrTextScore(text: string, confidence = 0) {
   const decimalAmounts =
     text.match(
@@ -222,14 +261,14 @@ export function invoiceOcrTextScore(text: string, confidence = 0) {
     /\b(?:tax|vat|gst)\b/i,
     /\b(?:total|amount due|balance due)\b/i,
   ].filter((pattern) => pattern.test(text)).length;
-  const currency = /[$€£¥₹₦₵₱]|R\$|KSh|\b(?:USD|EUR|GBP|CAD|AUD|NZD|KES|ZAR|NGN|GHS|JPY|CNY|INR|AED|UGX|TZS|RWF|BRL|PHP)\b/i.test(
-    text,
-  );
+  const currency = hasOcrCurrency(text);
+  const balance = invoiceOcrSummaryBalance(text);
   return (
     Math.max(0, confidence) * 3 +
     labels * 100 +
     Math.min(decimalAmounts, 12) * 90 +
     (currency ? 100 : 0) +
+    (balance === true ? 200 : balance === false ? -200 : 0) +
     Math.min(text.trim().length, 2000) * 0.1
   );
 }
@@ -239,9 +278,8 @@ export function needsOcrAccuracyPass(text: string, confidence = 0) {
     confidence < 70 ||
     !/\b(?:invoice|inv)\b/i.test(text) ||
     !/\b(?:total|amount due|balance due)\b/i.test(text) ||
-    !/(?:[$€£¥₹₦₵₱]|R\$|KSh|\b(?:USD|EUR|GBP|CAD|AUD|NZD|KES|ZAR|NGN|GHS|JPY|CNY|INR|AED|UGX|TZS|RWF|BRL|PHP)\b)/i.test(
-      text,
-    ) ||
+    !hasOcrCurrency(text) ||
+    invoiceOcrSummaryBalance(text) === false ||
     !/\d[\d ,.'’]*[.,]\d{2}\b/.test(text)
   );
 }

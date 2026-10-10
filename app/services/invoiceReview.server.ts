@@ -215,6 +215,8 @@ export async function saveInvoiceReview(
     ? resolveFxRateDate(form.get("fxRateDate")) || new Date(`${date}T00:00:00.000Z`)
     : null;
   if (fx.problem) issues.push(fx.problem);
+  if (vendorName === "Unknown Vendor")
+    issues.push("Confirm the supplier name before approval.");
   for (const item of items) {
     if (needsPackSize(item.supplierUoM) && !item.packSize)
       issues.push(
