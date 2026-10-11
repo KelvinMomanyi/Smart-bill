@@ -1,0 +1,21 @@
+async (page) => {
+  let release;
+  const pause = new Promise(resolve => { release = resolve; });
+  const handler = async route => { await pause; await route.continue().catch(() => {}); };
+  await page.route('**/assets/entry.client-*.js', handler);
+  try {
+    await page.goto('https://admin.shopify.com/store/creatorsstore254/apps/smartbill-1/app/reconciliation', { waitUntil: 'domcontentloaded' });
+    await page.frameLocator('iframe[src*="smart-bill-self-five.vercel.app"]').locator('[name=vendorName]').waitFor({ state: 'visible', timeout: 25000 });
+    const frame = page.frames().find(frame => frame.url().startsWith('https://smart-bill-self-five.vercel.app/app'));
+    const expected = { vendorName: 'MCP Early Input Test', poNumber: 'MCP-EARLY-20261011', expectedDate: '2026-10-18', notes: 'Entered before hydration.', itemSku: 'MCP-PAPER-01', itemName: 'Printer paper', itemRate: '12.5' };
+    for (const [name, value] of Object.entries(expected)) await frame.locator('[name="' + name + '"]').fill(value);
+    release();
+    await frame.waitForFunction(() => Object.keys(document.querySelector('[name=vendorName]')).some(key => key.startsWith('__reactProps$')), null, { polling: 100, timeout: 25000 });
+    await frame.locator('[name=itemQuantity]').fill('2.5');
+    const actual = await frame.locator('form').evaluateAll(forms => forms.filter(form => form.querySelector('[name=vendorName]')).map(form => Object.fromEntries([...new FormData(form)].filter(([name]) => ['vendorName', 'poNumber', 'expectedDate', 'notes', 'itemSku', 'itemName', 'itemRate', 'itemQuantity'].includes(name)))));
+    return { observedAt: new Date().toISOString(), scope: 'Actual Shopify UI; client script delayed; no submission or database writes', expected, actual, pass: Object.entries(expected).every(([name, value]) => actual[0]?.[name] === value) && actual[0]?.itemQuantity === '2.5' };
+  } finally {
+    release();
+    await page.unroute('**/assets/entry.client-*.js', handler);
+  }
+}

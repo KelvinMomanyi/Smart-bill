@@ -188,6 +188,20 @@ export default function PurchaseOrders() {
   const [bulkError, setBulkError] = useState<string>();
   const isSubmitting = navigation.state !== "idle";
   const submitting = useRef(false);
+  const formRef = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    // Server-rendered controls can be edited before React attaches listeners.
+    // Adopt their actual values once so the next controlled update cannot erase
+    // a merchant's early entries. Server validation still applies on submit.
+    if (!formRef.current) return;
+    const values = readPoFormValues(new FormData(formRef.current));
+    setVendorName(values.vendorName);
+    setPoNumber(values.poNumber);
+    setExpectedDate(values.expectedDate);
+    setNotes(values.notes);
+    setItemRows(values.itemRows);
+    setItems(values.items.length ? values.items : [emptyPoRow()]);
+  }, []);
   useEffect(() => {
     if (navigation.state === "idle") submitting.current = false;
   }, [navigation.state, actionData]);
@@ -350,6 +364,7 @@ export default function PurchaseOrders() {
           <Layout.Section>
             <Card>
               <Form
+                ref={formRef}
                 method="post"
                 onSubmit={(event) => {
                   if (submitting.current) {
