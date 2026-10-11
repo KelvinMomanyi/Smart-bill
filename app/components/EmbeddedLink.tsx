@@ -32,6 +32,7 @@ export function EmbeddedNavigationFields() {
     <>
       <input type="hidden" name="shop" value={shop} />
       <input type="hidden" name="host" value={host} />
+      <input type="hidden" name="embedded" value="1" />
     </>
   );
 }

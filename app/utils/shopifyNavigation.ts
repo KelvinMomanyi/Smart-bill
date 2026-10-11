@@ -26,7 +26,8 @@ export function shopifyEmbeddedAppUrl(shop: string, apiKey: string) {
 
 // Native links (before hydration, or opened in a new tab) have no App Bridge
 // Authorization header. The SDK requires both navigation hints to recover the
-// embedded session. These values never authorize access; authenticate.admin
+// embedded session, including its explicit iframe flag. These values never
+// authorize access; authenticate.admin
 // still verifies Shopify's token and determines the shop for every operation.
 export function shopifyAppPath(path: string, value?: string | null) {
   const shop = shopDomain(value);
@@ -34,6 +35,7 @@ export function shopifyAppPath(path: string, value?: string | null) {
   const url = new URL(path, "https://smartbill.invalid");
   if (url.pathname !== "/app" && !url.pathname.startsWith("/app/")) return path;
   url.searchParams.set("shop", shop);
+  url.searchParams.set("embedded", "1");
   url.searchParams.set(
     "host",
     btoa(`admin.shopify.com/store/${shop.replace(".myshopify.com", "")}`),

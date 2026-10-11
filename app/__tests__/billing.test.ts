@@ -405,9 +405,9 @@ test("billing API failures retain a retryable merchant message without provider 
   );
 });
 
-test("native embedded navigation retains both SDK hints for the authenticated store", () => {
+test("native embedded navigation retains the store, host and iframe flag required by the SDK", () => {
   const path = shopifyAppPath(
-    "/app/invoices?page=2&shop=other-review.myshopify.com&host=stale#review",
+    "/app/invoices?page=2&shop=other-review.myshopify.com&host=stale&embedded=0#review",
     "correct-review.myshopify.com",
   );
   const url = new URL(path, "https://app.example");
@@ -417,6 +417,7 @@ test("native embedded navigation retains both SDK hints for the authenticated st
     "admin.shopify.com/store/correct-review",
   );
   assert.equal(url.searchParams.get("page"), "2");
+  assert.equal(url.searchParams.get("embedded"), "1");
   assert.equal(url.hash, "#review");
   for (const outside of [
     "/privacy",
