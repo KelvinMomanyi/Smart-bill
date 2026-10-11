@@ -1,10 +1,14 @@
 # SmartBill launch and Shopify rejection status
 
+**Latest OCR evidence:** [9 October OCR remediation](SHOPIFY_OCR_LIVE_REMEDIATION_2026-10-09.md). The supplied WEBP now saves invoice 10001 with four correct lines and a linked PO. Parser, review-save and refresh/hydration fixes are deployed and verified, including a final valid PO creation/reopen/refresh/database check. Reinstall billing, the remaining live format/session matrix and accounting test prerequisites remain outstanding.
+
+**Later live review:** [Live MCP verification, 8 October 2026](SHOPIFY_LIVE_MCP_VERIFICATION_2026-10-08.md) supersedes the earlier observations below. The navigation/refresh fixes were deployed in commit `15f561f`. Eight live POs now have UI/database evidence, including a new post-deployment PO. Final same-store native navigation and refresh passed; OCR, reinstall and accounting tests remain pending.
+
 Follow-up checked 8 October 2026. This report supplements the [PO runtime review](SHOPIFY_PO_RUNTIME_REVIEW_2026-10-07.md) and [billing review](SHOPIFY_BILLING_REVIEW_2026-10-08.md). Those reports describe earlier work; their local passing results do not establish live Shopify approval.
 
 ## Current conclusion
 
-Neither rejection is confirmed resolved in the installed live app. Both have implementation fixes and local regression evidence. The public site's generic Admin link is still deployed; the additional public-link correction in this follow-up has not been deployed by this session. Some earlier changes are live, as shown by the updated button wording. The deployed Git revision could not be verified.
+Neither rejection is fully cleared for resubmission. The approved deployment is live at `https://smart-bill-self-five.vercel.app`, through the repository's existing Vercel production integration. Final merchant testing verified valid PO creation/reopen and persistence, same-store native home navigation, refresh without app exceptions, missing-record recovery and useful validation. The earlier hosted test-charge return passed in the correct store, and Starter remains active after deployment. See the linked live report for deployment evidence and remaining OCR, reinstall, accounting and broader live tests; the sections below record the earlier investigation.
 
 ## Why the app link opens the wrong place
 
@@ -97,10 +101,9 @@ The screenshot additions/deletion present in the working tree were supplied sepa
 
 ## Remaining acceptance
 
-1. Supply the exact failing app link, intended store and Shopify-generated listing/installation link. Configure the valid listing URL for a public installation button.
-2. Deploy the reviewed application revision to the configured app origin and verify its deployed revision/environment. No deployment was performed by this session.
-3. In a signed-in Shopify test/review store, launch from Admin, submit valid PO data, inspect the actual request/response, verify the committed database record and reopen it.
-4. Approve and decline actual Shopify-hosted test charges, retry and uninstall/reinstall; verify return to the same store. Repeat in a second store context and check session restart/expiry.
-5. Complete the outstanding installed-app navigation, OCR and configured accounting acceptance matrices in the earlier reports.
+1. Configure Shopify's exact official listing/preview URL if the public landing page must offer an installation button. It currently gives installation instructions without guessing a store.
+2. Completed: production deployment of commit `15f561f` and actual same-store merchant launch, new PO creation/reopen/database verification, native home navigation, refresh and operational validation. See the current live report for evidence and scope.
+3. Hosted test-charge cancel/retry/approval and same-store return passed live. Complete actual reinstall and renewed approval on a disposable test store; formal declined status, a second real store context and session restart/expiry remain unverified.
+4. Complete the remaining live navigation, OCR and configured accounting acceptance matrices in the current live report. File attachment is blocked by the browser connection, and verified Xero Demo/QuickBooks Sandbox MCP access remains unavailable.
 
 **NOT READY FOR SHOPIFY RETEST**

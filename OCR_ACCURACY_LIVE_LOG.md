@@ -77,7 +77,15 @@ Follow-up fixes support EGP and monetary L.E. suffixes without rewriting product
 
 The full suite passes 202 tests. TypeScript, targeted ESLint and the production build pass. The nine standard parser accuracy cases still pass; the painting document is deliberately kept as a failed true-original measurement rather than an invented successful corpus case. Recognition cannot be guaranteed 100% accurate across arbitrary scans. Every item and price still requires comparison with the original before approval/export.
 
-Deployment and live review follow-up will be recorded after verification.
+Production commit `323fe2e08ade5a77efdd6e9b29933eafb9d29cd8` is Active / Deployed (completed), verified in GitHub through native Playwright at 2026-10-10 17:37:53 UTC: `https://smart-bill-self-ecnuusd3h-bostone339-6995.vercel.app`.
+
+At 17:39 UTC the three printed rows were entered through the visible review controls, with EGP, the correct total 579.15 and Unknown Vendor for the genuinely absent supplier. Save returned 200 and `Invoice updated.`; browser refresh returned 200 and retained revision 1. At 17:44 UTC every row name, quantity, printed unit price and printed amount still matched the independent original: `live/painting-reviewed-line-check-2026-10-10.json`. These reviewed values are not a new untouched OCR pass. Printed pre-discount prices remain 100 / 20 / 25; document discount/net-price review is still required before financial approval.
+
+Scoped read-only PostgreSQL evidence `.cache/ocr-accuracy/evidence/2026-10-10T17-40-41-472Z-41f1cbb5-8053-45d8-9a7d-c5a760e53da2.json` verifies all item fields and corrected total persisted. The independent true-original comparison `runs/2026-10-10T17-44-01-344Z-e91ddbaf-a0f8-41a2-b90a-231a738e4b39.json` remains FAIL: parser 22/24 because raw OCR still has 679.15 and the supplier is absent; reviewed saved state 23/24 because Unknown Vendor is a placeholder. The metric does not silently count the unsupported discount as captured. A fresh actual file upload is still needed to assess the new browser recognition retry.
+
+The reopened UI showed the deployed missing-supplier warning, arithmetic mismatch and required EGP/KES-rate review. Save/reload audit `live/painting-reviewed-ui-2026-10-10.json` records 31 app responses, all 200 except a normal cached icon 304, zero failed app requests, zero app exceptions and zero app console errors. A 17:43 UTC read-only check confirms NEEDS_ATTENTION, no approval, NOT_EXPORTED, NOT_REQUESTED and no exports or Shopify cost changes: `.cache/ocr-accuracy/painting-financial-state-2026-10-10T17-43-34-346Z.json`.
+
+At 17:45:59 UTC native Playwright returned to the correct-store capture page and rearmed diagnostics for another independent document. The manual file input is enabled, with no selected file or pasted text and no picker interception listeners. No future upload is counted as tested in advance.
 
 ## Remaining verification (after the fourth document)
 
