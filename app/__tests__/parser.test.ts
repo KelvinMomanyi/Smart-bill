@@ -5,6 +5,27 @@ import {
   parseInvoiceText,
 } from "../utils/parser.server";
 
+test("non-invoice dates cannot fill a missing invoice date or remove its review warning", () => {
+  for (const label of ["Due Date", "Payment due", "Delivery Date", "Ship Date", "Expiry Date"]) {
+    const parsed = parseInvoiceText(`Invoice No: MISSING-DATE\n${label}: 2099-10-25\nSubtotal 10.00\nTax 0.00\nTotal USD 10.00`);
+    assert.notEqual(parsed.date, "2099-10-25");
+    assert.ok(parsed.warnings?.some(warning => /invoice date was missing/i.test(warning)));
+  }
+});
+
+test("explicit invoice dates win even when a due date shares their header line", () => {
+  const parsed = parseInvoiceText("Supplier: Acme\nInvoice No: DATE-1\nInvoice Date: 2026-10-11 Due Date: 2026-10-25\nTotal USD 10.00");
+  assert.equal(parsed.date, "2026-10-11");
+  assert.equal(parsed.dueDate, "2026-10-25");
+  assert.ok(!parsed.warnings?.some(warning => /invoice date was missing/i.test(warning)));
+});
+
+test("quantity-first rows with a missing price retain their name and flag the inferred rate", () => {
+  const parsed = parseInvoiceText("Supplier: Tom Green\nInvoice No: RATE-1\nDate 6/5/2016\nQuantity Description Unit Price Cost\n2.5 Labour 40.00 100.00\n1 Sub-contractor : Tile-It 228.00\nSubtotal 328.00\nTax 0.00\nTotal USD 328.00");
+  assert.deepEqual(parsed.items.map(i => [i.name, i.quantity, i.price, i.amount]), [["Labour", 2.5, 40, 100], ["Sub-contractor : Tile-It", 1, 228, 228]]);
+  assert.ok(parsed.warnings?.some(w => /unit price was missing.*printed quantity/i.test(w)));
+});
+
 test("Egyptian monetary suffixes preserve all item rows and flag document discounts", () => {
   const parsed = parseInvoiceText(`PAINTING\nINVOICE\nCompany:\nAdress:\nLocation:\nInvoice Number 2001321\nDate 12/26/2024\nDescription Quantity Unit price Amount\nProduct 1 5 100.00 L.E. 500.00 L.E.\nproduct 2 3 20.00 L.E. 60.00 L.E.\nproduct 3 1 25.00 L.E. 25.00 L.E.\nSubtotal 585.00 L.E.\nDiscount (10%) 58.50 L.E.\nTax 1 52.65 L.E.\nTotal 679.15 L.E.`);
   assert.equal(parsed.vendor.name, "Unknown Vendor");

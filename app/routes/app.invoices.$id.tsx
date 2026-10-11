@@ -88,7 +88,6 @@ import {
 } from "../utils/approvalRules";
 export async function loader({ request, params }: LoaderFunctionArgs) {
   const { session, admin } = await authenticate.admin(request);
-  await ensureDefaultApprovalRules(session.shop);
   const invoice = await prisma.invoice.findFirst({
     where: { id: params.id, shop: session.shop },
     include: {
@@ -101,7 +100,8 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       approvals: { include: { approvalRule: true } },
     },
   });
-  if (!invoice) throw new Response("Invoice not found", { status: 404 });
+  if (!invoice) return json({ missingInvoice: true as const });
+  await ensureDefaultApprovalRules(session.shop);
   const shopCurrency = await fetchShopCurrency(admin);
   const [role, purchaseOrders, events, fxOptions, approval, approvalStaff] =
     await Promise.all([
@@ -501,6 +501,15 @@ function OriginalDocument({
 }
 export default function InvoiceDetail() {
   const data = useLoaderData<typeof loader>();
+  if ("missingInvoice" in data)
+    return (
+      <Page title="Invoice not found">
+        <Card><BlockStack gap="300">
+          <Text as="p">This invoice is unavailable or has been deleted.</Text>
+          <Link to="/app/invoices">Back to invoices</Link>
+        </BlockStack></Card>
+      </Page>
+    );
   return (
     <InvoiceEditor
       key={`${data.invoice.id}-${data.invoice.revision}`}
@@ -511,7 +520,7 @@ export default function InvoiceDetail() {
 function InvoiceEditor({
   data,
 }: {
-  data: ReturnType<typeof useLoaderData<typeof loader>>;
+  data: Exclude<ReturnType<typeof useLoaderData<typeof loader>>, { missingInvoice: true }>;
 }) {
   const appPath = useEmbeddedAppPath();
   const {
@@ -937,7 +946,7 @@ function InvoiceEditor({
                   Add missing invoice line / freight charge
                 </Button>
                 <label>
-                  Subtotal, excluding tax{" "}
+                  Product subtotal, excluding tax and charges{" "}
                   <input
                     name="subtotal"
                     type="number"

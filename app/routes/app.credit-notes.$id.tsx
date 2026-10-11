@@ -54,7 +54,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       invoice: { include: { items: true } },
     },
   });
-  if (!credit) throw new Response("Credit note not found", { status: 404 });
+  if (!credit) return json({ missingCreditNote: true as const });
   const [role, candidates, connections] = await Promise.all([
     getUserRole(request),
     prisma.invoice.findMany({
@@ -128,10 +128,19 @@ export async function action({ request, params }: ActionFunctionArgs) {
 
 export default function CreditNoteDetail() {
   const appPath = useEmbeddedAppPath();
-  const { credit, role, candidates, connections, applied } =
-    useLoaderData<typeof loader>();
+  const data = useLoaderData<typeof loader>();
   const result = useActionData<typeof action>();
   const busy = useNavigation().state !== "idle";
+  if ("missingCreditNote" in data)
+    return (
+      <Page title="Credit note not found">
+        <Card><BlockStack gap="300">
+          <Text as="p">This credit note is unavailable or has been deleted.</Text>
+          <Link to="/app/credit-notes">Back to credit notes</Link>
+        </BlockStack></Card>
+      </Page>
+    );
+  const { credit, role, candidates, connections, applied } = data;
   return (
     <Page
       title={`Credit note ${credit.creditNoteNumber || credit.id.slice(0, 8)}`}

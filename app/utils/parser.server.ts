@@ -42,6 +42,7 @@ type ParsedInvoiceItemWithSource = ParsedInvoiceItem & {
   _rawAmount?: string;
   _quantityRepaired?: boolean;
   _leadingQuantityRepaired?: boolean;
+  _unitPriceInferred?: boolean;
 };
 
 export type ParsedInvoice = {
@@ -811,6 +812,17 @@ function parseItemLine(
 
   if (!relaxed) return null;
 
+  // A confirmed quantity-first table can leave the unit-price cell blank.
+  // Keep its quantity out of the description and derive the rate only from
+  // that printed quantity and extended amount, with an explicit review flag.
+  if (hints.quantityFirst && hints.amount) {
+    const quantityFirstAmount = normalizedRow.match(new RegExp(`^(${quantityPattern})\\s+(.+)\\s+${moneyPattern}$`, "i"));
+    if (quantityFirstAmount) {
+      const item = buildParsedItem(quantityFirstAmount[2], quantityFirstAmount[1], undefined, quantityFirstAmount[3]);
+      if (item) return withUnit({ ...item, _unitPriceInferred: true });
+    }
+  }
+
   const quantityAndAmount = normalizedRow.match(
     new RegExp(
       `^(.+)\\s+(${quantityPattern})\\s+${itemUnitPattern}${moneyPattern}$`,
@@ -1113,7 +1125,12 @@ function findInvoiceNumber(lines: string[]) {
 
 function findInvoiceDate(lines: string[], dateOrder: "DMY" | "MDY") {
   for (const line of lines) {
-    if (/(?:due|payment)\s+date/i.test(line)) continue;
+    const explicit = line.match(/\b(?:invoice|issued?|billing)\s+date\s*:?\s*(.+)$/i);
+    const normalized = normalizeDate(explicit?.[1], dateOrder);
+    if (normalized) return normalized;
+  }
+  for (const line of lines) {
+    if (/\b(?:due|payment|delivery|ship(?:ping)?|expiry|expiration)\b/i.test(line)) continue;
 
     const labeled = line.match(/(?:invoice\s+date|\bdate)\s*:?\s*(.+)$/i);
     const normalized = normalizeDate(labeled?.[1], dateOrder);
@@ -1121,7 +1138,7 @@ function findInvoiceDate(lines: string[], dateOrder: "DMY" | "MDY") {
   }
 
   return normalizeDate(
-    findValue(lines, [
+    findValue(lines.filter(line => !/\b(?:due|payment|delivery|ship(?:ping)?|expiry|expiration)\b/i.test(line)), [
       /\b(\d{4}-\d{1,2}-\d{1,2})\b/,
       /\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b/,
     ]), dateOrder,
@@ -1464,6 +1481,7 @@ function withoutItemSource(item: ParsedInvoiceItemWithSource): ParsedInvoiceItem
     _rawAmount: _ignoredAmount,
     _quantityRepaired: _ignoredQuantityRepair,
     _leadingQuantityRepaired: _ignoredLeadingQuantityRepair,
+    _unitPriceInferred: _ignoredUnitPriceInference,
     ...parsed
   } = item;
   return parsed;
@@ -1556,6 +1574,8 @@ export function parseInvoiceText(text: string, dateOrder: "DMY" | "MDY" = "DMY")
     warnings.push(
       "The table quantity heading was unreadable. SmartBill used a leading quantity only where quantity × unit price matched the printed line amount; confirm these quantities against the original before approval.",
     );
+  if (sourceItems.some((item) => item._unitPriceInferred))
+    warnings.push("A unit price was missing from the item table. SmartBill inferred it from the printed quantity and line amount; confirm the inferred unit price before approval.");
   if (inferredTax != null)
     warnings.push(
       `${taxRate != null ? "The invoice showed a tax rate but no tax amount." : "The invoice did not show a separate tax amount."} SmartBill inferred ${inferredTax.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} from total minus subtotal; confirm it before approval.`,

@@ -4,6 +4,26 @@ export const BROWSER_OCR_MAX_PAGES = 10;
 export const BROWSER_PDF_SCALE = 2;
 export const BROWSER_OCR_MIN_WIDTH = 1800;
 export const BROWSER_OCR_MAX_EDGE = 3600;
+export const BROWSER_OCR_OPERATION_TIMEOUT_MS = 120_000;
+const OCR_CLEANUP_TIMEOUT_MS = 5_000;
+
+class BrowserOcrTimeoutError extends Error {
+  constructor() {
+    super("Invoice recognition took too long. Retry processing or enter the invoice text manually.");
+    this.name = "BrowserOcrTimeoutError";
+  }
+}
+
+async function ocrOperation<T>(operation: Promise<T>, timeout = BROWSER_OCR_OPERATION_TIMEOUT_MS): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([operation, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new BrowserOcrTimeoutError()), timeout);
+    })]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 export const BROWSER_OCR_SCRIPTS = {
   tesseract:
     "https://cdn.jsdelivr.net/npm/tesseract.js@6.0.1/dist/tesseract.min.js",
@@ -50,7 +70,8 @@ export type BrowserOcrRuntime = {
     destroy(): Promise<void>;
   };
   createCanvas(): HTMLCanvasElement;
-  prepareImage?(image: Blob, monochrome: boolean): Promise<Blob>;
+  prepareImage?(image: Blob, monochrome: boolean, rotation?: number): Promise<Blob>;
+  imageRotations?(image: Blob): Promise<number[]>;
 };
 type OcrWindow = Window & {
   Tesseract?: {
@@ -114,8 +135,13 @@ async function loadRuntime(pdf: boolean): Promise<BrowserOcrRuntime> {
     openPdf: (data) =>
       scope.pdfjsLib!.getDocument({ data, isEvalSupported: false }),
     createCanvas: () => document.createElement("canvas"),
-    prepareImage: (image, monochrome) =>
-      prepareBrowserInvoiceImage(image, monochrome),
+    prepareImage: (image, monochrome, rotation) =>
+      prepareBrowserInvoiceImage(image, monochrome, rotation),
+    imageRotations: async image => {
+      const source = await createImageBitmap(image);
+      try { return source.width > source.height ? [90, 270] : [180]; }
+      finally { source.close(); }
+    },
   };
 }
 
@@ -178,12 +204,13 @@ function enhanceInvoiceCanvas(canvas: HTMLCanvasElement, monochrome: boolean) {
   context.putImageData(image, 0, 0);
 }
 
-async function prepareBrowserInvoiceImage(image: Blob, monochrome: boolean) {
+async function prepareBrowserInvoiceImage(image: Blob, monochrome: boolean, rotation = 0) {
   const source = await createImageBitmap(image);
   const dimensions = browserOcrImageDimensions(source.width, source.height);
   const canvas = document.createElement("canvas");
-  canvas.width = dimensions.width;
-  canvas.height = dimensions.height;
+  const sideways = rotation === 90 || rotation === 270;
+  canvas.width = sideways ? dimensions.height : dimensions.width;
+  canvas.height = sideways ? dimensions.width : dimensions.height;
   try {
     const context = canvas.getContext("2d");
     if (!context) throw new Error("This browser cannot prepare invoice images.");
@@ -191,7 +218,9 @@ async function prepareBrowserInvoiceImage(image: Blob, monochrome: boolean) {
     context.fillRect(0, 0, canvas.width, canvas.height);
     context.imageSmoothingEnabled = true;
     context.imageSmoothingQuality = "high";
-    context.drawImage(source, 0, 0, canvas.width, canvas.height);
+    context.translate(canvas.width / 2, canvas.height / 2);
+    context.rotate(rotation * Math.PI / 180);
+    context.drawImage(source, -dimensions.width / 2, -dimensions.height / 2, dimensions.width, dimensions.height);
     enhanceInvoiceCanvas(canvas, monochrome);
     return await new Promise<Blob>((resolve, reject) =>
       canvas.toBlob(
@@ -327,11 +356,12 @@ export async function processInvoiceInBrowser(
 ): Promise<BrowserOcrResult> {
   const isPdf = validateBrowserOcrFile(file);
   onProgress({ status: "Loading OCR engine...", progress: 0 });
-  const engine = runtime || (await loadRuntime(isPdf));
+  const engine = runtime || (await ocrOperation(loadRuntime(isPdf)));
   const loading = isPdf ? engine.openPdf(await file.arrayBuffer()) : undefined;
   let preview: Blob = file;
   let rawText = "";
   let worker: BrowserOcrWorker | undefined;
+  let stopped = false;
   let activePage = 1;
   let activePageCount = 1;
   let activeStatus = "Loading OCR engine...";
@@ -339,7 +369,7 @@ export async function processInvoiceInBrowser(
   let activePassSpan = 0.7;
   const confidences: number[] = [];
   try {
-    const pdf = await loading?.promise;
+    const pdf = loading ? await ocrOperation(loading.promise) : undefined;
     const pageCount = pdf?.numPages || 1;
     activePageCount = pageCount;
     // Reject larger documents explicitly so later-page totals cannot silently
@@ -348,8 +378,9 @@ export async function processInvoiceInBrowser(
       throw new Error(
         `This PDF exceeds the ${BROWSER_OCR_MAX_PAGES}-page browser OCR limit. Split it into complete invoices before processing.`,
       );
-    worker = await engine.createWorker("eng", {
+    worker = await ocrOperation<BrowserOcrWorker>(engine.createWorker("eng", {
       logger(message) {
+        if (stopped) return;
         if (message.status === "recognizing text")
           onProgress({
             status: activeStatus,
@@ -379,12 +410,20 @@ export async function processInvoiceInBrowser(
             progress: Math.round(((activePage - 1) / activePageCount) * 100),
           });
       },
-    });
-    await worker.setParameters({
+    }).then(created => {
+      // An engine can finish initializing after its deadline. Release that
+      // late worker without letting an abandoned capture resume.
+      if (stopped) {
+        void ocrOperation(created.terminate(), OCR_CLEANUP_TIMEOUT_MS).catch(() => undefined);
+        throw new BrowserOcrTimeoutError();
+      }
+      return created;
+    }));
+    await ocrOperation(worker.setParameters({
       preserve_interword_spaces: "1",
       tessedit_pageseg_mode: "3",
       user_defined_dpi: "300",
-    });
+    }));
     for (let page = 1; page <= pageCount; page++) {
       activePage = page;
       activePassStart = 0;
@@ -395,7 +434,7 @@ export async function processInvoiceInBrowser(
           status: "Converting PDF page " + page + " of " + pageCount + "...",
           progress: Math.round(((page - 1) / pageCount) * 100),
         });
-        const pdfPage = await pdf.getPage(page);
+        const pdfPage = await ocrOperation(pdf.getPage(page));
         const viewport = pdfPage.getViewport({ scale: BROWSER_PDF_SCALE });
         const canvas = engine.createCanvas();
         try {
@@ -404,8 +443,8 @@ export async function processInvoiceInBrowser(
           const context = canvas.getContext("2d");
           if (!context)
             throw new Error("This browser cannot render PDF pages.");
-          await pdfPage.render({ canvasContext: context, viewport }).promise;
-          image = await new Promise<Blob>((resolve, reject) =>
+          await ocrOperation(pdfPage.render({ canvasContext: context, viewport }).promise);
+          image = await ocrOperation(new Promise<Blob>((resolve, reject) =>
             canvas.toBlob(
               (blob) =>
                 blob
@@ -414,7 +453,7 @@ export async function processInvoiceInBrowser(
               "image/png",
               0.95,
             ),
-          );
+          ));
           if (page === 1) preview = image;
         } finally {
           canvas.width = 0;
@@ -432,9 +471,9 @@ export async function processInvoiceInBrowser(
       // Upscaling and contrast cleanup improve small decimal points and currency
       // glyphs. Auto-rotation handles phone photos taken in the wrong orientation.
       const primaryImage = engine.prepareImage
-        ? await engine.prepareImage(image, true)
+        ? await ocrOperation(engine.prepareImage(image, true))
         : image;
-      const primary = await worker.recognize(primaryImage, { rotateAuto: true });
+      const primary = await ocrOperation(worker.recognize(primaryImage, { rotateAuto: true }));
       let selected = primary;
 
       // Dense tables and sparse layouts segment punctuation differently. Retry
@@ -458,13 +497,13 @@ export async function processInvoiceInBrowser(
           ),
         });
         try {
-          await worker.setParameters({ tessedit_pageseg_mode: "6" });
+          await ocrOperation(worker.setParameters({ tessedit_pageseg_mode: "6" }));
           const alternateImage = engine.prepareImage
-            ? await engine.prepareImage(image, false)
+            ? await ocrOperation(engine.prepareImage(image, false))
             : image;
-          const alternate = await worker.recognize(alternateImage, {
+          const alternate = await ocrOperation(worker.recognize(alternateImage, {
             rotateAuto: true,
-          });
+          }));
           if (
             invoiceOcrTextScore(
               alternate.data.text,
@@ -476,7 +515,8 @@ export async function processInvoiceInBrowser(
             )
           )
             selected = alternate;
-        } catch {
+        } catch (error) {
+          if (error instanceof BrowserOcrTimeoutError) throw error;
           // The primary reading remains usable if the optional accuracy pass
           // cannot run on a particular browser or image.
         }
@@ -499,13 +539,13 @@ export async function processInvoiceInBrowser(
             ),
           });
           try {
-            await worker.setParameters({ tessedit_pageseg_mode: "11" });
+            await ocrOperation(worker.setParameters({ tessedit_pageseg_mode: "11" }));
             const sparseImage = engine.prepareImage
-              ? await engine.prepareImage(image, true)
+              ? await ocrOperation(engine.prepareImage(image, true))
               : image;
-            const sparse = await worker.recognize(sparseImage, {
+            const sparse = await ocrOperation(worker.recognize(sparseImage, {
               rotateAuto: true,
-            });
+            }));
             if (
               invoiceOcrTextScore(
                 sparse.data.text,
@@ -517,16 +557,42 @@ export async function processInvoiceInBrowser(
               )
             )
               selected = sparse;
-          } catch {
+          } catch (error) {
+            if (error instanceof BrowserOcrTimeoutError) throw error;
             // Keep the strongest earlier result when sparse recognition fails.
           }
         }
 
         try {
-          await worker
-            .setParameters({ tessedit_pageseg_mode: "3" });
+          await ocrOperation(worker.setParameters({ tessedit_pageseg_mode: "3" }), OCR_CLEANUP_TIMEOUT_MS);
         } catch {
           // The worker is terminated below even if its optional reset fails.
+        }
+      }
+      if (engine.prepareImage && engine.imageRotations) {
+        const rotations = await ocrOperation(engine.imageRotations(image));
+        const weak = needsOcrAccuracyPass(selected.data.text, Number(selected.data.confidence || 0));
+        // Auto deskew alone does not reliably read upside-down invoices. Check
+        // portrait 180-degree candidates only for weak reads; landscape pages
+        // also get upright 90/270 candidates. Choose actual text, never edits.
+        if (weak || rotations.includes(90)) {
+          activePassStart = 0.85; activePassSpan = 0.15;
+          activeStatus = "Checking invoice orientation...";
+          for (const rotation of rotations) {
+            try {
+              await ocrOperation(worker.setParameters({ tessedit_pageseg_mode: "3" }));
+              const upright = await ocrOperation(engine.prepareImage(image, true, rotation));
+              const reading = await ocrOperation(worker.recognize(upright, { rotateAuto: false }));
+              // At equal quality, prefer pixels explicitly rendered upright
+              // over the automatic orientation read; do not rewrite its text.
+              if (invoiceOcrTextScore(reading.data.text, Number(reading.data.confidence || 0)) >=
+                  invoiceOcrTextScore(selected.data.text, Number(selected.data.confidence || 0))) selected = reading;
+            } catch (error) {
+              if (error instanceof BrowserOcrTimeoutError) throw error;
+              // An optional orientation read can fail without losing a usable
+              // earlier read. The review workflow still validates its values.
+            }
+          }
         }
       }
       const text = selected.data.text;
@@ -553,6 +619,10 @@ export async function processInvoiceInBrowser(
         confidences.length,
     };
   } finally {
-    await Promise.allSettled([worker?.terminate(), loading?.destroy()]);
+    stopped = true;
+    await Promise.allSettled([
+      worker ? ocrOperation(worker.terminate(), OCR_CLEANUP_TIMEOUT_MS) : undefined,
+      loading ? ocrOperation(loading.destroy(), OCR_CLEANUP_TIMEOUT_MS) : undefined,
+    ]);
   }
 }

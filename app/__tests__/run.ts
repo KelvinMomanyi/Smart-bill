@@ -15,5 +15,6 @@ import "./billing.test";
 import "./purchaseOrderWorkflow.test";
 import "./merchantErrors.test";
 import "./invoiceDeletion.test";
+import "./missingInvoiceRoute.test";
 import "./accountingIntegration.test";
 import "./accountingWorkflow.test";

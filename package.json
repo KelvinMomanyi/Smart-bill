@@ -16,6 +16,7 @@
     "setup": "prisma generate && prisma migrate deploy",
     "test": "vite-node --config vite.tasks.config.ts app/__tests__/run.ts",
     "test:ocr-accuracy": "vite-node --config vite.tasks.config.ts scripts/check-ocr-accuracy.ts",
+    "test:ocr-browser": "node scripts/check-ocr-browser.mjs",
     "worker": "vite-node --config vite.tasks.config.ts scripts/invoice-worker.ts",
     "typecheck": "tsc --noEmit",
     "build:check": "node scripts/patch-polaris-ssr.mjs && prisma generate && remix vite:build",

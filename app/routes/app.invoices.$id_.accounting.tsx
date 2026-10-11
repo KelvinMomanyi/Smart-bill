@@ -33,7 +33,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     where: { id: params.id, shop: session.shop },
     include: { items: true, exports: true },
   });
-  if (!invoice) throw new Response("Invoice not found.", { status: 404 });
+  if (!invoice) return json({ missingInvoice: true as const });
   const platform = livePlatform(
     new URL(request.url).searchParams.get("platform") || "XERO",
   );
@@ -98,10 +98,19 @@ export async function action({ request, params }: ActionFunctionArgs) {
 }
 export default function InvoiceAccountingDetails() {
   const appPath = useEmbeddedAppPath();
-  const { invoice, platform, settings, catalog, error } =
-    useLoaderData<typeof loader>();
+  const data = useLoaderData<typeof loader>();
   const result = useActionData<typeof action>();
   const busy = useNavigation().state !== "idle";
+  if ("missingInvoice" in data)
+    return (
+      <Page title="Invoice not found">
+        <Card><BlockStack gap="300">
+          <Text as="p">This invoice is unavailable or has been deleted.</Text>
+          <Button url={appPath("/app/invoices")}>Back to invoices</Button>
+        </BlockStack></Card>
+      </Page>
+    );
+  const { invoice, platform, settings, catalog, error } = data;
   const mapping = (invoice.accountingMapping as any)?.[platform] as
     | BillMapping
     | undefined;

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   browserOcrImageDimensions,
+  BROWSER_OCR_OPERATION_TIMEOUT_MS,
   invoiceOcrTextScore,
   invoiceOcrSummaryBalance,
   needsOcrAccuracyPass,
@@ -97,6 +98,70 @@ function fakeRuntime(
     workerCount: () => workerCount,
   };
 }
+
+test("a stalled OCR initialization times out and releases a worker that arrives late", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const mock = fakeRuntime();
+  let resolveWorker: (worker: Awaited<ReturnType<BrowserOcrRuntime["createWorker"]>>) => void = () => {};
+  let terminated = false;
+  mock.runtime.createWorker = () => new Promise(resolve => { resolveWorker = resolve; });
+  const operation = processInvoiceInBrowser(new File(["image"], "invoice.png", { type: "image/png" }), () => {}, mock.runtime);
+  const rejected = assert.rejects(operation, /took too long.*Retry processing/i);
+  t.mock.timers.tick(BROWSER_OCR_OPERATION_TIMEOUT_MS);
+  await rejected;
+  resolveWorker({ setParameters: async () => {}, recognize: async () => ({ data: { text: "late" } }), terminate: async () => { terminated = true; } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(terminated, true);
+});
+
+test("stalled recognition times out, stops optional reads and terminates its worker", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const mock = fakeRuntime(1, () => new Promise(() => {}));
+  const operation = processInvoiceInBrowser(new File(["image"], "invoice.png", { type: "image/png" }), () => {}, mock.runtime);
+  const rejected = assert.rejects(operation, /took too long/i);
+  await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(BROWSER_OCR_OPERATION_TIMEOUT_MS);
+  await rejected;
+  assert.equal(mock.calls.length, 1);
+  assert.equal(mock.terminated(), true);
+});
+
+test("worker cleanup cannot keep a timed-out capture pending indefinitely", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const mock = fakeRuntime();
+  mock.runtime.createWorker = async () => ({ setParameters: async () => {}, recognize: () => new Promise(() => {}), terminate: () => new Promise(() => {}) });
+  const operation = processInvoiceInBrowser(new File(["image"], "invoice.png", { type: "image/png" }), () => {}, mock.runtime);
+  const rejected = assert.rejects(operation, /took too long/i);
+  await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(BROWSER_OCR_OPERATION_TIMEOUT_MS);
+  await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(5000);
+  await rejected;
+});
+
+test("an upside-down image uses an upright recognition read rather than guessed fields", async () => {
+  const upright = "Invoice ROTATION-1\nDate 2026-10-11\nSubtotal 10.00\nTax 0.00\nTotal USD 10.00";
+  const mock = fakeRuntime(1, async call => ({ data: { text: call === 4 ? upright : "JOIOANI unreadable upside down", confidence: call === 4 ? 96 : 40 } }));
+  const rotations: number[] = [];
+  mock.runtime.prepareImage = async (image, _monochrome, rotation = 0) => { rotations.push(rotation); return image; };
+  mock.runtime.imageRotations = async () => [180];
+  const result = await processInvoiceInBrowser(new File(["image"], "invoice.png", { type: "image/png" }), () => {}, mock.runtime);
+  assert.equal(result.rawText, upright);
+  assert.ok(rotations.includes(180));
+  assert.equal(mock.calls.at(-1)?.options?.rotateAuto, false);
+});
+
+test("equal-quality landscape readings prefer the explicitly upright recognition", async () => {
+  const wrong = "Invoice ROTATEDS0\nDate 2026-10-11\nSubtotal 10.00\nTax 0.00\nTotal USD 10.00";
+  const upright = wrong.replace("ROTATEDS0", "ROTATED90");
+  assert.equal(invoiceOcrTextScore(wrong, 94), invoiceOcrTextScore(upright, 94));
+  const mock = fakeRuntime(1, async call => ({ data: { text: call === 1 ? wrong : call === 2 ? "upside down" : upright, confidence: call === 2 ? 30 : 94 } }));
+  mock.runtime.prepareImage = async image => image;
+  mock.runtime.imageRotations = async () => [90, 270];
+  const result = await processInvoiceInBrowser(new File(["image"], "invoice.png", { type: "image/png" }), () => {}, mock.runtime);
+  assert.equal(result.rawText, upright);
+  assert.equal(mock.calls.length, 3);
+});
 
 test("browser OCR configures one English worker with auto-rotation", async () => {
   const mock = fakeRuntime();

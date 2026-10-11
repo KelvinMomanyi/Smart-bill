@@ -19,6 +19,7 @@ For the cleanest measurement, leave extracted fields unchanged until the initial
 ```powershell
 npm run test:ocr-accuracy
 npm test
+npm run test:ocr-browser
 node --env-file=.env scripts/capture-ocr-evidence.mjs --shop creatorsstore254.myshopify.com --invoice INVOICE_ID
 npm run test:ocr-accuracy -- --case CASE_ID --evidence .cache/ocr-accuracy/evidence/SNAPSHOT.json
 npm run test:ocr-accuracy -- --case CASE_ID --evidence .cache/ocr-accuracy/evidence/INITIAL.json --ui-evidence .cache/ocr-accuracy/live/INITIAL-UI.json
@@ -37,3 +38,11 @@ Use `OCR_ACCURACY_LIVE_LOG.md` for human-reviewed results over time. Keep one ro
 Required variety before a broad reliability claim: independent suppliers/layouts, text PDF, scanned PDF, JPG/PNG, multipage documents, rotation, low resolution/blur, decimal quantities and rates, multiple currencies, taxed/untaxed invoices, missing fields, manually corrected fields, OCR timeout/failure, retry, duplicate upload, save/reopen/refresh. A readable fixture that passes does not prove unreadable documents will extract perfectly. Unreadable results must keep a usable manual-review path.
 
 No files need to be selected simultaneously: upload one invoice now, another later, and keep appending evidence. A failure in any critical field remains a failure regardless of recognition confidence or earlier passing invoices.
+
+## Real image/PDF and failure-state browser matrix
+
+`npm run test:ocr-browser` generates independent synthetic originals in the ignored `.cache/ocr-browser-fixtures` directory and runs the actual Tesseract/PDF.js processor in an isolated browser. It checks PNG, JPG, single/multipage PDF (with items on both pages), poor contrast, 90/180-degree rotation and missing source fields. Full comparison failures are retained; missing fields with explicit review warnings are labelled `PASS_REVIEW_REQUIRED`, not perfect extraction. On Windows it uses installed Edge; other systems need Playwright Chromium.
+
+The same command exercises the production capture hook with controlled API/worker failures: service error, server error, expired session, stalled initialization/recognition, and retrying the original without another upload. This is a local UI test with simulated transport failures, **not** authenticated Shopify capture, database persistence, real billing or provider export verification. Results and actual OCR candidate readings are written to `.cache/ocr-accuracy/browser-runs`. It uses no live credentials, does not approve/export invoices, and serves only the generated fixture names from a localhost server.
+
+OCR operations have a two-minute deadline, with bounded worker/PDF cleanup. A timeout restores the review/retry path rather than leaving submit disabled. Explicit upright reads recover orthogonal rotations; equal-quality upright readings take precedence over automatic rotation. A missing unit-price cell in a confirmed quantity-first table is inferred from quantity and amount with a review warning. Non-invoice dates cannot silently fill the invoice date.
