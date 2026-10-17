@@ -1,6 +1,6 @@
 # SmartBill submission readiness — 16 October 2026
 
-**Local validation passes. Production deployment and final live acceptance remain blocked, so do not resubmit yet.** No new deployment or Partner Dashboard submission was performed. This report supersedes the earlier build-blocked status in this file.
+**Historical report, superseded on 17 October 2026 by [the current readiness report](SHOPIFY_SUBMISSION_READINESS_2026-10-17.md).** Deployment, authenticated Chrome access, real billing approval/plan changes, installation/reinstallation and QuickBooks sandbox acceptance have since been verified. The sections below retain the earlier audit evidence and limitations as they stood on 16 October.
 
 ## Fixes completed
 

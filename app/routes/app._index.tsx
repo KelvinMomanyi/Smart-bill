@@ -38,7 +38,7 @@ import {
   requireSubscription,
 } from "../services/billing.server";
 import { enqueueDocument } from "../services/invoiceJobs.server";
-import { PLANS } from "../utils/plans";
+import { MAX_FILE_BYTES, PLANS } from "../utils/plans";
 import { formatMoney } from "../utils/format";
 import { getUserRole } from "../utils/rbac.server";
 import { InvoiceOcrStatus, useInvoiceOcr } from "../components/InvoiceOcr";
@@ -176,6 +176,7 @@ export default function Dashboard() {
     role,
     uploadLimitMb,
   } = useLoaderData<typeof loader>();
+  const maxFileMb = Math.min(MAX_FILE_BYTES / (1024 * 1024), uploadLimitMb);
   const [uploadError, setUploadError] = useState("");
   const result = useActionData<typeof action>();
   const busy = useNavigation().state !== "idle";
@@ -256,13 +257,13 @@ export default function Dashboard() {
                 return;
               }
               if (
-                files.some((file) => file.size > 10 * 1024 * 1024) ||
+                files.some((file) => file.size > maxFileMb * 1024 * 1024) ||
                 files.reduce((sum, file) => sum + file.size, 0) >
                   uploadLimitMb * 1024 * 1024
               ) {
                 event.preventDefault();
                 setUploadError(
-                  `Use files up to 10 MB each and at most ${uploadLimitMb} MB in total per batch on this host.`,
+                  `Use files up to ${maxFileMb} MB each and at most ${uploadLimitMb} MB in total per batch.`,
                 );
                 return;
               }
@@ -298,7 +299,7 @@ export default function Dashboard() {
                   />
                 </label>
                 <Text as="p" tone="subdued">
-                  PDFs and images, up to 10 MB and 10 pages each. Growth
+                  PDFs and images, up to {maxFileMb} MB and 10 pages each. Growth
                   supports batches of up to 10 documents. Recognition runs on
                   your device; keep this page open until saving completes.
                 </Text>

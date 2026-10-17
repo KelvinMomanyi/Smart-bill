@@ -265,7 +265,7 @@ try {
   await mkdir(".cache", { recursive: true });
   browser = await chromium.launch({
     headless: true,
-    ...(process.platform === "win32" ? { channel: "msedge" } : {}),
+    ...(process.platform === "win32" ? { channel: "chrome" } : {}),
   });
   for (const shop of shops) {
     const context = await browser.newContext({

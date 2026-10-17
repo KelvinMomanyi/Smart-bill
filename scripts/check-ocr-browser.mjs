@@ -11,7 +11,7 @@ try {
   await server.listen();
   const address = server.httpServer.address();
   const base = `http://127.0.0.1:${address.port}`;
-  browser = await chromium.launch({ headless: true, ...(process.platform === "win32" ? { channel: "msedge" } : {}) });
+  browser = await chromium.launch({ headless: true, ...(process.platform === "win32" ? { channel: "chrome" } : {}) });
   const page = await browser.newPage();
   page.on("pageerror", error => report.exceptions.push(error.message));
   await page.goto(base + "/scripts/ocr-accuracy/browser-matrix.html");

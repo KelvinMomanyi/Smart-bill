@@ -31,7 +31,7 @@ import {
   isDevelopmentStore,
   billingReturnUrl,
 } from "../services/billing.server";
-import { PLANS, planFromName, TRIAL_DAYS } from "../utils/plans";
+import { MAX_FILE_BYTES, PLANS, planFromName, TRIAL_DAYS } from "../utils/plans";
 import { validCurrency } from "../utils/invoiceRules";
 import { createAuthorization } from "../services/accountingAuthorization.server";
 import {
@@ -140,6 +140,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     shop: session.shop,
     billingReturned:
       new URL(request.url).searchParams.get("billing") === "returned",
+    uploadLimitMb: process.env.VERCEL ? 4 : 25,
     settings,
     subscription,
     used,
@@ -508,6 +509,7 @@ export default function Settings() {
     approvalRules,
     inboxReady,
     inboxDomain,
+    uploadLimitMb,
   } = useLoaderData<typeof loader>();
   const result = useActionData<typeof action>();
   const busy = useNavigation().state !== "idle";
@@ -578,7 +580,8 @@ export default function Settings() {
             </InlineStack>
             <Text as="p" tone="subdued">
               No automatic overage fees. Allowances reset on the first of each
-              month, UTC. Maximum 10 MB and 10 pages per document. Each accepted
+              month, UTC. Files up to {Math.min(MAX_FILE_BYTES / (1024 * 1024), uploadLimitMb)} MB
+              and 10 pages each; {uploadLimitMb} MB total per batch. Each accepted
               upload counts once; retries of that upload are included.
             </Text>
           </BlockStack>

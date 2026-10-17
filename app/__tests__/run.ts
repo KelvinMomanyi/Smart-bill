@@ -14,6 +14,7 @@ import "./browserOcrWorkflow.test";
 import "./billing.test";
 import "./billingSubscription.test";
 import "./purchaseOrderWorkflow.test";
+import "./poReconciliation.test";
 import "./merchantErrors.test";
 import "./invoiceDeletion.test";
 import "./missingInvoiceRoute.test";

@@ -250,7 +250,7 @@ try {
     ...(process.env.PLAYWRIGHT_BROWSER_EXECUTABLE
       ? { executablePath: process.env.PLAYWRIGHT_BROWSER_EXECUTABLE }
       : process.platform === "win32"
-        ? { channel: "msedge" }
+        ? { channel: "chrome" }
         : {}),
   });
   for (const javaScriptEnabled of [true, false]) {

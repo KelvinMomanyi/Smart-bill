@@ -2,14 +2,14 @@
 
 Fetched with the official Shopify CLI from [the current AI self-review checklist](https://shopify.dev/docs/apps/launch/app-store-review/app-store-ai-self-review-requirements). Checklist SHA-256: `8344cf11677e42569e83f4ca5c94317ead3abaece18ab3aae21c0f6cfc5488d0`.
 
-100 entries accounted for: **25 likely passing, 0 likely failing, 6 needing review, 69 skipped across 10 category groups**. These are local checklist assessments; they do not certify deployed compliance or assess every broader requirement. See [the readiness report](SHOPIFY_RESUBMISSION_2026-10-16.md) for security, deployment, functionality and listing blockers.
+Updated 17 October 2026 after live production acceptance: **100 entries accounted for: 30 likely passing, 0 likely failing, 1 needing review, 69 skipped across 10 category groups**. These assessments do not certify comprehensive compliance. See [the current readiness report](SHOPIFY_SUBMISSION_READINESS_2026-10-17.md) for remaining accounting and security work.
 
 | Requirement | Assessment | Evidence / acceptance remaining |
 | --- | --- | --- |
-| 1.1.1 Use session tokens for authentication | Needs review | Session-token authentication exists; a real authenticated Chrome incognito run with third-party cookies blocked remains unverified. |
+| 1.1.1 Use session tokens for authentication | Likely passing | Isolated Google Chrome loaded authenticated Settings and survived refresh with Chrome third-party-cookie restrictions, app Cookie/Set-Cookie headers stripped, and app localStorage denied. Shopify authentication was reused in memory; no app browser storage was supplied. |
 | 1.1.2 Use Shopify checkout | Likely passing | No customer checkout or off-platform customer-payment processing detected. |
 | 1.1.3 Direct merchants to the Shopify Theme Store | Likely passing | No theme installation or download functionality detected. |
-| 1.1.4 Use only factual information | Needs review | No fabricated storefront data detected. Compare the actual Dashboard listing, integrations, screenshots and prices with the deployed release. |
+| 1.1.4 Use only factual information | Needs review | Actual listing, category, five images, support/privacy links, prices and instructions inspected. Saved consistent SmartBill/Growth names, removed unsupported annual prices and inactive inbox claims, and supplied a sample invoice. QuickBooks sandbox bill and attachment passed live verification. Xero demo-company export and reviewer login still need live acceptance. |
 | 1.1.6 Build single-merchant storefronts. Marketplaces should be sales channels | Likely passing | Tenant-scoped supplier invoices and vendor records; no independent seller marketplace detected. |
 | 1.1.7 Always build Payment Gateway apps using the Payments API and after obtaining authorization | Likely passing | No payment gateway or payment-processing extension detected. |
 | 1.1.8 Build apps for Shopify POS only, not third-party systems | Likely passing | No third-party POS integration detected; Xero/QuickBooks are accounting integrations. |
@@ -20,8 +20,8 @@ Fetched with the official Shopify CLI from [the current AI self-review checklist
 | 1.1.15 Process refunds only through the original payment processor | Likely passing | Supplier credit-note allocation is bookkeeping; no customer refund/payment-processor logic detected. |
 | 1.1.16 Don't provide capital lending | Likely passing | No lending, cash-advance or financing feature detected. |
 | 1.2.1 Use Shopify App Pricing or the Shopify Billing API | Likely passing | Shopify SDK billing.request and central recurring plan configuration; no external app-charge integration detected. |
-| 1.2.2 Implement Shopify App Pricing or the Shopify Billing API correctly | Needs review | Fixed ACTIVE test-charge recognition and passed isolated approval/decline/reinstall browser scenarios. Fresh hosted approval and reinstall on the deployed fix remain unverified. |
-| 1.2.3 Allow pricing plan changes | Needs review | In-app Starter/Growth replacements pass browser tests with simulated Shopify responses. Verify actual charge history and both transitions after deploying. |
+| 1.2.2 Implement Shopify App Pricing or the Shopify Billing API correctly | Likely passing | Live hosted test approval recognized immediately and after refresh; cancellation preserved Growth. On a new empty development store, actual uninstall revoked the installation and its webhook removed sessions. Reinstallation required a new hosted approval and registered the new Starter subscription. |
+| 1.2.3 Allow pricing plan changes | Likely passing | Actual Growth to Starter and Starter to Growth replacements passed in Chrome; Shopify API confirmed both active plans and configured prices. Original store restored to Growth. Listed plans now offer only supported monthly prices. |
 | 2.2.1 Use Shopify APIs | Likely passing | Shopify SDK initialization, authenticated GraphQL product/inventory queries and cost mutations exist. |
 | 2.2.3 Use the latest version of Shopify App Bridge | Likely passing | Shopify Remix AppProvider emits the CDN App Bridge script before app children; no legacy @shopify/app-bridge dependency. |
 | 2.2.4 Use the GraphQL Admin API | Likely passing | Admin GraphQL operations validate with configured 2026-10 schema; no general REST Admin calls detected. |
@@ -29,8 +29,8 @@ Fetched with the official Shopify CLI from [the current AI self-review checklist
 | 2.2.7 Only launch Max modal with merchant interaction | Likely passing | No automatic Max modal/fullscreen launches detected. |
 | 2.3.1 Initiate installation from a Shopify-owned surface | Likely passing | No manual shop-domain form; installation links point to Shopify-owned listing or supplied installation flow. |
 | 2.3.2 Authenticate immediately after install | Likely passing | Protected loaders/actions use authenticate.admin; SDK handles managed OAuth/token exchange before merchant data access. |
-| 2.3.3 Redirect to the app UI after installation | Needs review | SDK and store-specific embedded navigation are implemented and tested locally. Actual fresh-install destination remains unverified. |
-| 2.3.4 Require OAuth authentication immediately after reinstall | Needs review | Uninstall removes sessions and the SDK reacquires tokens. Actual reinstall needs a suitable test installation without deleting existing merchant connections. |
+| 2.3.3 Redirect to the app UI after installation | Likely passing | A new free development store installed from Shopify's native approval surface and reached SmartBill's embedded app and Settings. |
+| 2.3.4 Require OAuth authentication immediately after reinstall | Likely passing | Actual installation, API uninstall and real webhook cleanup, then native reinstallation verified: sessions 2 to 0 to 2, canceled subscription not inherited, new charge approval required. Existing merchant installation was preserved. |
 | 3.1.1 Use a valid TLS/SSL certificate | Likely passing | Public production app/privacy/terms loaded successfully over validated HTTPS in HTTP and Playwright MCP checks. |
 | 3.2.1 Request read_all_orders access scope only if it provides necessary app functionality | Likely passing | read_all_orders is absent from configured scopes. |
 | 3.2.2 Request write_payment_mandate scope only if it provides necessary app functionality | Likely passing | write_payment_mandate is absent from configured scopes. |

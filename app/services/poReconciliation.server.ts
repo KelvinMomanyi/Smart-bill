@@ -2,6 +2,7 @@ import prisma from "../db.server";
 import type { Prisma } from "@prisma/client";
 import { invoiceIssues } from "../utils/invoiceRules";
 import { matchPoLine, receiptStatus } from "../utils/poMatching";
+import { isChargeLine } from "../utils/landedCost";
 export { matchPoLine } from "../utils/poMatching";
 export async function reconcileInvoiceWithPO(
   invoiceId: string,
@@ -42,6 +43,7 @@ export async function refreshPurchaseOrderInTransaction(
         `Invoice ${bill.invoiceNumber || bill.id} currency differs from PO currency ${po.currency}.`,
       );
     for (const item of bill.items) {
+      if (isChargeLine(item)) continue;
       const matched = matchPoLine(item, po.items);
       if (!matched) {
         discrepancies.push(`Unmatched or ambiguous item: ${item.name}.`);
