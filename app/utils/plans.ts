@@ -5,7 +5,7 @@ export const PLANS = {
   },
   GROWTH: {
     name: "SmartBill Growth", label: "Growth", price: 29.99, invoiceLimit: 250,
-    description: "250 invoices per calendar month. Everything in Starter, plus bulk upload and an invoice email inbox.",
+    description: "250 invoices per calendar month. Everything in Starter, plus bulk upload of up to 10 documents.",
   },
 } as const;
 export type PlanKey = keyof typeof PLANS;

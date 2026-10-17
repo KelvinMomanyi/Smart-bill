@@ -1096,17 +1096,17 @@ export default function Settings() {
             </InlineStack>
           </BlockStack>
         </Card>
-        <Card>
-          <BlockStack gap="300">
-            <Text as="h2" variant="headingMd">
-              Invoice email inbox
-            </Text>
-            <Text as="p">
-              {settings.inboundAlias && inboxReady
-                ? `Forward supplier invoices to ${settings.inboundAlias}@${inboxDomain}.`
-                : "Growth includes an inbox for forwarded supplier PDF and image attachments."}
-            </Text>
-            {inboxReady ? (
+        {inboxReady && (
+          <Card>
+            <BlockStack gap="300">
+              <Text as="h2" variant="headingMd">
+                Invoice email inbox
+              </Text>
+              <Text as="p">
+                {settings.inboundAlias
+                  ? `Forward supplier invoices to ${settings.inboundAlias}@${inboxDomain}.`
+                  : "Growth includes an inbox for forwarded supplier PDF and image attachments."}
+              </Text>
               <Form method="post">
                 <input type="hidden" name="intent" value="enable-inbox" />
                 <Button submit loading={busy}>
@@ -1115,14 +1115,9 @@ export default function Settings() {
                     : "Enable inbox"}
                 </Button>
               </Form>
-            ) : (
-              <Text as="p" tone="subdued">
-                Email capture is awaiting activation by the app operator. File
-                upload remains available.
-              </Text>
-            )}
-          </BlockStack>
-        </Card>
+            </BlockStack>
+          </Card>
+        )}
         {owner && (
           <Card>
             <BlockStack gap="300">

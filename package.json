@@ -96,7 +96,14 @@
     },
     "lodash": "^4.18.1",
     "@remix-run/dev": {
-      "ws": "^7.5.13"
+      "ws": "^7.5.13",
+      "esbuild": "^0.25.8"
+    },
+    "@prisma/config": {
+      "deepmerge-ts": "^8.0.0"
+    },
+    "remark-mdx-frontmatter": {
+      "toml": "^4.2.0"
     },
     "vite": "^6.2.2"
   },
