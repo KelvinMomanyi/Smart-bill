@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHmac, randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import { createRequestHandler } from "@remix-run/node";
 
@@ -11,6 +12,7 @@ process.env.SHOPIFY_API_SECRET = "submission-check-secret";
 process.env.SHOPIFY_APP_URL = "https://app.example";
 const prisma = new PrismaClient();
 prisma.session.count = async () => 0;
+prisma.session.findUnique = async () => null;
 globalThis.prismaGlobal = prisma;
 
 try {
@@ -82,8 +84,38 @@ try {
     assert.equal(response.status, 200, path);
     await response.text();
   }
+
+  // Verify the real SDK rejects forged mandatory webhooks before any tenant
+  // data can be touched, then accepts signed customer topics without a session.
+  const webhookBody = JSON.stringify({ shop_domain: "submission-check.myshopify.com" });
+  const webhookHeaders = (topic, signature) => ({
+    "Content-Type": "application/json",
+    "X-Shopify-Topic": topic,
+    "X-Shopify-Shop-Domain": "submission-check.myshopify.com",
+    "X-Shopify-API-Version": "2026-10",
+    "X-Shopify-Webhook-Id": randomUUID(),
+    "X-Shopify-Hmac-Sha256": signature,
+  });
+  for (const topic of ["customers/data_request", "customers/redact", "shop/redact"]) {
+    const forged = await request("/webhooks/compliance", {
+      method: "POST", body: webhookBody,
+      headers: webhookHeaders(topic, "invalid"),
+    });
+    assert.equal(forged.status, 401, `Forged ${topic} webhook`);
+    await forged.text();
+  }
+  const signature = createHmac("sha256", process.env.SHOPIFY_API_SECRET)
+    .update(webhookBody).digest("base64");
+  for (const topic of ["customers/data_request", "customers/redact"]) {
+    const signed = await request("/webhooks/compliance", {
+      method: "POST", body: webhookBody,
+      headers: webhookHeaders(topic, signature),
+    });
+    assert.equal(signed.status, 200, `Signed ${topic} webhook`);
+    await signed.text();
+  }
   console.log(
-    "Production bundle: landing page, Shopify launch/login redirects and legal pages passed (no database or merchant charges).",
+    "Production bundle: landing page, Shopify launch/login redirects, legal pages and mandatory webhook signatures passed (no database or merchant charges).",
   );
 } finally {
   await prisma.$disconnect();

@@ -126,7 +126,7 @@ test("declined, canceled, pending, expired and unknown subscriptions grant no pl
   );
 });
 
-test("Shopify test subscriptions grant access only to verified development stores", async (t) => {
+test("Shopify-approved test subscriptions are recognized on development and review stores", async (t) => {
   legacyFlag(t);
   for (const development of [false, true]) {
     const admin = {
@@ -140,7 +140,7 @@ test("Shopify test subscriptions grant access only to verified development store
     };
     assert.equal(
       (await subscriptionFor(admin as any))?.plan ?? null,
-      development ? "STARTER" : null,
+      "STARTER",
     );
     assert.equal(await isDevelopmentStore(admin as any), development);
   }
@@ -149,10 +149,10 @@ test("Shopify test subscriptions grant access only to verified development store
   ]);
   delete (unknownStore.data as any).shop;
   assert.equal(
-    await subscriptionFor({
+    (await subscriptionFor({
       graphql: async () => Response.json(unknownStore),
-    } as any),
-    null,
+    } as any))?.plan,
+    "GROWTH",
   );
 });
 

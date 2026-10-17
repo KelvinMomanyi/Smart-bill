@@ -12,6 +12,7 @@ import "./invoiceJobs.test";
 import "./browserOcr.test";
 import "./browserOcrWorkflow.test";
 import "./billing.test";
+import "./billingSubscription.test";
 import "./purchaseOrderWorkflow.test";
 import "./merchantErrors.test";
 import "./invoiceDeletion.test";

@@ -15,6 +15,8 @@
     "docker-start": "npm run setup && npm run start",
     "setup": "prisma generate && prisma migrate deploy",
     "test": "vite-node --config vite.tasks.config.ts app/__tests__/run.ts",
+    "test:billing": "vite-node --config vite.tasks.config.ts app/__tests__/billingSubscription.test.ts",
+    "test:pdf": "vite-node --config vite.tasks.config.ts scripts/check-server-pdf.ts",
     "test:ocr-accuracy": "vite-node --config vite.tasks.config.ts scripts/check-ocr-accuracy.ts",
     "test:ocr-browser": "node scripts/check-ocr-browser.mjs",
     "worker": "vite-node --config vite.tasks.config.ts scripts/invoice-worker.ts",
@@ -81,14 +83,21 @@
     "@graphql-tools/url-loader": "8.0.16",
     "@graphql-codegen/client-preset": "4.7.0",
     "@graphql-codegen/typescript-operations": "4.5.0",
-    "minimatch": "9.0.5",
+    "minimatch": "9.0.9",
     "vite": "^6.2.2"
   },
   "overrides": {
     "@graphql-tools/url-loader": "8.0.16",
     "@graphql-codegen/client-preset": "4.7.0",
     "@graphql-codegen/typescript-operations": "4.5.0",
-    "minimatch": "9.0.5",
+    "minimatch": "9.0.9",
+    "cacache": {
+      "tar": "^7.5.22"
+    },
+    "lodash": "^4.18.1",
+    "@remix-run/dev": {
+      "ws": "^7.5.13"
+    },
     "vite": "^6.2.2"
   },
   "author": "PC"

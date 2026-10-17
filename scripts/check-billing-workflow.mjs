@@ -26,6 +26,10 @@ const shops = [
   "billing-review-a.myshopify.com",
   "billing-review-b.myshopify.com",
 ];
+// Reproduce an approved test charge on a review store that Shopify does not
+// identify as a partner development store. Charge creation must still request
+// real billing for this store; only Shopify's response grants the entitlement.
+const reviewShop = shops[1];
 const subscriptions = new Map();
 const rejectedBillingShops = new Set();
 const charges = [];
@@ -136,7 +140,7 @@ globalThis.fetch = async (input, options) => {
     };
   } else
     data = {
-      shop: { plan: { partnerDevelopment: true } },
+      shop: { plan: { partnerDevelopment: url.hostname !== reviewShop } },
       currentAppInstallation: {
         activeSubscriptions: subscriptions.get(url.hostname) || [],
       },
@@ -304,7 +308,7 @@ try {
               id: `gid://shopify/AppSubscription/${index}`,
               name: charge.name,
               status: "ACTIVE",
-              test: charge.test,
+              test: shop === reviewShop ? true : charge.test,
               lineItems: charge.lineItems.map((item) => ({
                 plan: { pricingDetails: item.plan.appRecurringPricingDetails },
               })),
@@ -373,7 +377,7 @@ try {
         .waitFor();
       const charge = charges.at(-1);
       assert.equal(charge.shop, shop);
-      assert.equal(charge.test, true);
+      assert.equal(charge.test, shop !== reviewShop);
       assert.equal(charge.trialDays, 14);
       assert.equal(charge.replacementBehavior, "APPLY_IMMEDIATELY");
       assert.equal(

@@ -1,5 +1,7 @@
 # SmartBill submission review — October 7, 2026
 
+Historical review. See [the 16 October readiness report](SHOPIFY_RESUBMISSION_2026-10-16.md) and [current local requirements matrix](SHOPIFY_REQUIREMENTS_MATRIX_2026-10-16.md) for the latest results and unresolved release checks.
+
 **The three previously detected source failures are corrected. Deployment and live acceptance checks are still required before submission.** This is a local AI self-review, not confirmation of Shopify approval.
 
 The [live Shopify checklist](https://shopify.dev/docs/apps/launch/app-store-review/app-store-ai-self-review-requirements) was fetched again at `2026-10-07T03:41:42.911Z`. This follow-up reevaluates the corrected requirements and retains the previous assessments for unchanged functionality: **28 likely passing, 0 likely failing in the corrected source, 3 needing review, 10 groups skipped (68 entries)**. All 99 checklist entries are accounted for; skipped entries are not passes.

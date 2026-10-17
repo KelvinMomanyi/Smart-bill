@@ -355,8 +355,13 @@ function normalizeCanvasForOcr(canvas: Canvas) {
   }
 
   samples.sort((left, right) => left - right);
-  const low = samples[Math.floor(samples.length * 0.02)] ?? 0;
   const high = samples[Math.floor(samples.length * 0.98)] ?? 255;
+  // Sparse invoice pages can have white pixels at both percentiles. Keep the
+  // background at the white end of the range instead of subtracting it to zero.
+  const low = Math.min(
+    samples[Math.floor(samples.length * 0.02)] ?? 0,
+    high - 60,
+  );
   const spread = Math.max(60, high - low);
 
   for (let index = 0; index < pixels.length; index += 4) {
@@ -733,7 +738,7 @@ async function extractTextFromPdf(
   const deadline = Date.now() + getOcrTimeoutMs();
   const pdfjs = await loadPdfJs();
   const loadingTask = pdfjs.getDocument({
-    canvasFactory: new NodeCanvasFactory(),
+    CanvasFactory: NodeCanvasFactory,
     data: new Uint8Array(buffer),
     useSystemFonts: true,
   });

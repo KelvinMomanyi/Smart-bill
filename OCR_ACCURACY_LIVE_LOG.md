@@ -92,3 +92,33 @@ At 17:45:59 UTC native Playwright returned to the correct-store capture page and
 Continue uploading independent invoice layouts over time. Live PDF/JPG/multipage/rotation/poor scans and OCR timeout/service-failure coverage remain pending. The printed P.O. reference requires merchant selection. Broader Shopify reinstall billing and Xero Demo/QuickBooks Sandbox verification remain as described in the earlier review; this test suite does not establish complete App Store readiness.
 
 **NOT READY FOR SHOPIFY RETEST**
+
+## Sales PNG — fifth uploaded document, 11 October 2026
+
+The merchant uploaded `Sales_Invoice_Example.png`, 32716 bytes, image/png, 567 × 915 pixels. Job `4155dc5a-0444-4d59-b718-211461c046fa` completed one page and invoice `086d2fc6-da5a-49ec-b9fe-d584dbcac8c2` was created at 03:05:13 UTC. The browser connection restarted during the upload observation. Its original upload/completion network requests were lost and are not claimed as verified after the fact. The revision-0 UI and scoped database snapshot were captured before review corrections.
+
+The original prints TOM GREEN HANDYMAN, invoice 0003521, date 6/5/2016, subtotal 2928 including freight 150, tax 439.20 and total 3367.20. The store's DMY setting interprets the date as 2016-05-06. Six rows print: Labour 23.75 × 40 = 950; Nails and screws 50 × 0.80 = 40; Paint and Plywood 1 × 1000 = 1000; Imported wall tiles 40 × 14 = 560; Freight 1 × 150 = 150; Sub-contractor : Tile-It quantity 1, blank printed unit price, amount 228.
+
+All six quantities and extended amounts and the five printed unit prices matched the original. The last unit price 228 is inferred, not printed. The initial last description wrongly included its leading quantity: `1 Sub-contractor : Tile-It`. A bare dollar sign cannot establish ISO currency; USD is still a default requiring merchant confirmation. This document is therefore not a perfect untouched extraction pass.
+
+At 03:32:31 UTC the actual review UI saved the corrected last description and product subtotal 2778 (= printed subtotal 2928 minus separately captured freight 150). Tax 439.20 and total 3367.20 were retained. Save returned HTTP 200 / “Invoice updated.” Reload retained revision 1 and all six rows. The adjusted product subtotal is explicitly a normalization to the app's financial model, not a claim that the original prints 2778. The review label now explains that field excludes tax and charges.
+
+Evidence: `.cache/ocr-accuracy/live/sales-0003521-initial-ui.json`, `sales-0003521-review-save.json`, revision-0 snapshot `evidence/2026-10-11T03-28-31-806Z-9f987f44-f2b8-4b4c-8da4-d64fd940d233.json` and reviewed snapshot `evidence/2026-10-11T03-34-34-067Z-805aed90-75b9-43e9-9145-0d8fd71e7e42.json`. Read-only verification at 09:45 UTC again confirmed all rows, revision 1, NEEDS_ATTENTION, unapproved, NOT_EXPORTED, NOT_REQUESTED, zero accounting exports and zero cost changes. FX, currency and freight allocation still require review.
+
+## Isolated browser OCR matrix — distinct from live uploads
+
+The new `npm run test:ocr-browser` harness uses actual Tesseract/PDF.js and the production OCR/capture hook in an isolated Edge browser with synthetic PNG, JPG, PDF, multipage PDF, 180-degree, 90-degree, poor-contrast and missing-field fixtures. It has no merchant authentication. Provider/API failures are deliberately simulated. Local fixture attachments do not bypass the live MCP's denied file-attachment policy.
+
+The first runs exposed a permanently busy capture on stalled worker initialization/recognition, an unreadable upside-down invoice, a sideways invoice-number error and due-date substitution when the invoice date was absent. Deadline/cleanup, upright-recognition selection, and date-parser fixes were implemented. Quantity-first missing-price rows now retain a clean description and an explicit inference warning.
+
+Final real-engine matrix `.cache/ocr-accuracy/browser-runs/2026-10-11T03-38-29-145Z.json` passes seven complete fixtures at 19/19 fields each (133/133). The incomplete fixture remains 17/19 and PASS_REVIEW_REQUIRED: absent supplier/date are not relabeled as accurate captures. All eight actual-hook UI checks pass, including three retries from the original document without another upload. A final recovery-only rerun with private-file denial configured passed at `2026-10-11T08-02-05-236Z.json`. Earlier failed runs remain intact.
+
+The 214-test suite, TypeScript, targeted ESLint and production build pass. The OCR/missing-record changes deployed in `0fc38fb299cc4a9f8440f27d0f20d9edb29cc535`. Live post-deployment PO creation returned 200 and persisted exactly one USD 31.25 PO, which reopened and refreshed successfully. A further early-navigation defect was reproduced after deployment: a native invoice recovery link lacked `embedded=1` and redirected Admin into its own iframe. The shared navigation helper and native GET fields were corrected in deployed `bcbf04d23674fdb1ad557db480d76701c966ccb5`; the same early-click probe and all four missing-record recovery links pass through the actual UI.
+
+The final deployed source is `ace2fa0833530976a0bd9a072f316497d6e35fd5`, Active / Deployed (completed), verified through Playwright MCP at 11:08:11 UTC. It preserves merchant PO entries made before hydration. The live delayed-hydration probe passes; a subsequent real PO `MCP-REMAINING-20261011-03` returned 200 and success, reopened/refreshed correctly and persisted exactly once at USD 31.25. The last scoped database query at 11:17:57 UTC confirmed zero accounting exports and zero product cost changes.
+
+The deployed manual-text fallback also saved invoice `MCP-RECOVERY-20261011-01` through the merchant UI and reopened it with two correct rows, total USD 328 and explicit missing-date/inferred-price review warnings. This is parser/UI evidence, not a fresh file recognition pass. At 15:18:25 UTC the actual Apps sidebar again launched the correct-store capture page. Five stale browser-connection file dialogs were canceled without supplying attachments; at 15:19:59 UTC the manual picker was ready with no selected file. All details and private evidence paths are in the current [remediation report](SHOPIFY_REMAINING_REMEDIATION_2026-10-11.md).
+
+A new untouched live file capture after the latest deployment, real reinstall/fresh charge approval, Xero Demo export and QuickBooks Sandbox export still require their recorded prerequisites. Local matrix results do not replace those merchant/provider checks.
+
+**NOT READY FOR SHOPIFY RETEST**

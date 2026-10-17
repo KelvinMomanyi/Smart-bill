@@ -26,7 +26,6 @@ export async function isDevelopmentStore(admin: Admin) {
 export async function subscriptionFor(admin: Admin) {
   const response = await admin.graphql(`#graphql
     query SmartBillSubscription {
-      shop { plan { partnerDevelopment } }
       currentAppInstallation { activeSubscriptions { id name status test
         lineItems { plan { pricingDetails { ... on AppRecurringPricing { price { amount currencyCode } interval } } } }
       } }
@@ -49,11 +48,10 @@ export async function subscriptionFor(admin: Admin) {
       };
     }[];
   }[];
+  // Shopify can approve test charges for review stores that are not partner
+  // development stores. The test flag describes charging, not approval status.
   const active = subscriptions.find(
-    (s) =>
-      s.status === "ACTIVE" &&
-      planFromName(s.name) &&
-      (!s.test || body.data?.shop?.plan?.partnerDevelopment === true),
+    (s) => s.status === "ACTIVE" && planFromName(s.name),
   );
   if (!active) return null;
   const plan = planFromName(active.name)!;
